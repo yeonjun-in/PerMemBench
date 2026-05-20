@@ -1,33 +1,3 @@
-"""
-3_0_skeleton_dialogue_gen.py
-
-Generates dialogue sessions from an integrated timeline (output of 2_1_integrate_timeline.py).
-
-Each session corresponds to one entry in the timeline sessions array.
-Sessions are generated in timeline order (by session_id).
-
-Key design decisions:
-  - User LLM gets: persona + event_description + gt_memory facts (framed as who they are)
-  - Agent LLM gets: NO memory context (completely cold start every session)
-  - GT memory comes directly from skeleton (no post-hoc extraction)
-
-memory_required branching:
-  - memory_required=True  : event_description + gt_memory from domain skeleton (existing path)
-  - memory_required=False : event_description from timeline directly, gt_memory=[]
-                            uses --max_turns_oneoff (default 5) instead of --max_turns
-                            gt_facts block is omitted from user prompt (nothing to reveal)
-
-Usage:
-    python 3_0_skeleton_dialogue_gen.py \\
-        --input_file ./life_timelines/00aefb8e.json \\
-        --output_dir  ./skeleton_dialogues
-
-    python 3_0_skeleton_dialogue_gen.py \\
-        --input_dir  ./life_timelines \\
-        --output_dir ./skeleton_dialogues \\
-        --provider openai --model gpt-4o
-"""
-
 import json
 import os
 import argparse
@@ -206,17 +176,7 @@ def _fact_to_open_topic(fact: str) -> str:
 
 
 def build_gt_facts_section(gt_memory: list[dict]) -> str:
-    """
-    Format gt_memory facts for the user prompt.
-
-    user_profile:
-        Traits/preferences the user already has — shape how they naturally
-        speak and react. Do NOT announce them; let them emerge through behavior.
-
-    ongoing_state:
-        Things NOT yet decided — the user arrives without the answer.
-        Only the question is shown, so the decision happens in-conversation.
-    """
+    
     if not gt_memory:
         return ""
 
@@ -249,11 +209,7 @@ def build_gt_facts_section(gt_memory: list[dict]) -> str:
 
 
 def build_gt_facts_block(gt_memory: list[dict]) -> str:
-    """
-    Wraps build_gt_facts_section() in the full prompt block.
-    Returns empty string when gt_memory is empty (oneoff sessions),
-    so the USER_OPENING_PROMPT section is cleanly omitted.
-    """
+    
     facts_section = build_gt_facts_section(gt_memory)
     if not facts_section:
         return ""
@@ -261,11 +217,7 @@ def build_gt_facts_block(gt_memory: list[dict]) -> str:
 
 
 def build_prior_context_section(prior_sessions: list[dict]) -> str:
-    """
-    Build a brief summary of previous sessions to give the user LLM continuity.
-    Uses only gt_memory facts that were decided/revealed in those sessions.
-    Oneoff sessions (gt_memory=[]) are automatically skipped.
-    """
+    
     if not prior_sessions:
         return ""
 
@@ -371,16 +323,7 @@ def generate_session(
     min_turns: int = 3,
     prior_sessions: list[dict] | None = None,
 ) -> list[dict]:
-    """
-    Generate a single dialogue session.
-    max_turns = maximum number of user-agent turn PAIRS.
-    Returns list of {role, content} dicts.
-
-    When gt_memory is empty (oneoff sessions):
-      - gt_facts_block is omitted from the opening prompt
-      - revealed-facts tracking is skipped (nothing to track)
-      - early exit fires as soon as the user has nothing more to ask
-    """
+    
     dialogue = []
     gt_facts_block = build_gt_facts_block(gt_memory)
     prior_context_section = build_prior_context_section(prior_sessions or [])
@@ -576,11 +519,11 @@ def main():
     )
     parser.add_argument("--input_file", type=str, default=None,
                         help="Path to a single timeline JSON file")
-    parser.add_argument("--input_dir", type=str, default='life_timelines_v5_merged',
+    parser.add_argument("--input_dir", type=str, default='life_timelines_merged',
                         help="Directory containing timeline JSON files")
     parser.add_argument("--limit", type=int, default=None,
                         help="Limit the number of files to process")
-    parser.add_argument("--output_dir", type=str, default="./skeleton_dialogues_v5",
+    parser.add_argument("--output_dir", type=str, default="./skeleton_dialogues",
                         help="Output directory (default: ./skeleton_dialogues_gpt)")
     parser.add_argument("--provider", type=str, default="openai",
                         help="LLM provider for both user and agent: openai | claude | together | gemini")

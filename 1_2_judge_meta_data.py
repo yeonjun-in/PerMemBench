@@ -72,9 +72,6 @@ Return a JSON array with one object per domain:
 # Judge models configuration
 JUDGE_MODELS = {
     "openai": ["gpt-5.1", 'o3-mini'],
-    # "claude": ["claude-haiku-4-5"],
-    # "gemini": ["gemini-3-flash-preview"],
-    # "together": ["meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8", "Qwen/Qwen3-235B-A22B-fp8"]
 }
 
 
@@ -142,18 +139,6 @@ def judge_file(
     model: str,
     domains_to_judge: list[str] | None = None
 ) -> dict:
-    """
-    Judge all domains in a single file with ONE LLM call.
-    
-    Args:
-        filepath: Path to the JSON file
-        provider: LLM provider
-        model: Model name
-        domains_to_judge: Optional list of domain names to filter (if None, judge all)
-    
-    Returns:
-        dict with judgments for each domain
-    """
     llm = UnifiedLLM(provider, model)
     
     with open(filepath, 'r', encoding='utf-8') as f:
@@ -203,16 +188,6 @@ def run_multi_model_judgment(
     sample_size: int | None = None,
     max_workers: int = 4
 ):
-    """
-    Run judgment across multiple LLM families.
-    
-    Args:
-        input_dir: Directory containing generated persona metadata JSON files
-        output_dir: Directory to save judgment results
-        models: Dict of {provider: [model_names]} to use. If None, uses JUDGE_MODELS
-        sample_size: Number of files to sample (if None, process all)
-        max_workers: Number of parallel workers
-    """
     models = models or JUDGE_MODELS
     os.makedirs(output_dir, exist_ok=True)
     

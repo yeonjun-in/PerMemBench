@@ -1,40 +1,3 @@
-"""
-2_3_generate_phase2_skeleton.py
-
-Stage 2.3: Phase 2 Life Skeleton 생성.
-
-2_2에서 결정된 패턴 전환을 바탕으로 Phase 2 (~12개월)의 skeleton을 생성한다.
-
-2_2 변화 룰:
-  1. mem_to_oneoff  : 기존 memory_required=True 도메인 1개 → oneoff으로 강등
-  2. added_mem      : 새 memory_required=True 도메인 1개 추가
-  3. added_oneoff   : 새 memory_required=False 도메인 1개 추가 (없을 수 있음)
-
-Phase 2 도메인 구성:
-  [memory_required=True skeletons]
-    - retained : Phase 1 mem 도메인 중 mem_to_oneoff가 아닌 것 (이어서 새 프로젝트)
-    - added    : 2_2의 added_mem 도메인 (완전 새 skeleton)
-
-  [oneoff sessions]
-    - demoted  : mem_to_oneoff 도메인 (Phase 1엔 mem이었으나 Phase 2에선 oneoff)
-    - retained : Phase 1 기존 oneoff 도메인들 (그대로 유지)
-    - added    : 2_2의 added_oneoff 도메인 (있을 경우)
-
-전환 서사(transition_event)는 이 스크립트에서 LLM으로 생성.
-
-Usage:
-  python 2_3_generate_phase2_skeleton.py \\
-      --timeline_file ./life_timelines_v5/{uuid}.json \\
-      --shift_file ./pattern_shifts/{uuid}.json \\
-      --output_dir ./phase2_skeletons
-
-  python 2_3_generate_phase2_skeleton.py \\
-      --timeline_dir ./life_timelines_v5 \\
-      --shift_dir ./pattern_shifts \\
-      --output_dir ./phase2_skeletons \\
-      --provider openai --model gpt-4o
-"""
-
 import json
 import os
 import argparse
@@ -59,7 +22,7 @@ MAX_ONEOFF_DOMAINS_PHASE2 = 4
 
 
 # ============================================================
-# PROMPT — 전환 서사 생성
+# PROMPT — transition narrative generation
 # ============================================================
 
 NARRATIVE_SYSTEM_PROMPT = """\
@@ -325,15 +288,7 @@ def get_event_range(frequency: str) -> tuple:
 
 
 def normalize_gt_memory_items(raw_gt_memory) -> list:
-    """
-    Canonicalize gt_memory items to the life_skeletons_v5_clean format:
-      [{"type","fact","probing_question","answer"}, ...]
-
-    Handles malformed outputs such as:
-      - {"user_profile": [...], "ongoing_state": [...]}
-      - [{"user_profile": [...], "ongoing_state": [...]}]
-      - mixed canonical + grouped entries
-    """
+    
     if raw_gt_memory is None:
         return []
 
@@ -409,7 +364,7 @@ def normalize_skeleton_gt_memory(skeleton: dict) -> dict:
 
 
 def extract_covered_facts(phase1_domain_skeletons: list, phase2_already_generated: list) -> str:
-    """Phase 1 + Phase 2 기생성 도메인의 user_profile facts 수집."""
+    """Collect user_profile facts from pre-generated Phase 1 + Phase 2 domains."""
     facts = []
     for ds in phase1_domain_skeletons:
         for proj in ds.get("skeleton", {}).get("projects", []):
@@ -456,11 +411,7 @@ def format_phase1_events_to_avoid(
     domain_name: str,
     domain_was_mem: bool,
 ) -> str:
-    """
-    Phase 2 oneoff 생성 시 피해야 할 Phase 1 이벤트 목록.
-    - domain_was_mem=True  : Phase 1에서 memory_required=True였던 도메인 → skeleton events 참조
-    - domain_was_mem=False : Phase 1에서 oneoff이었던 도메인 → oneoff events 참조
-    """
+    
     if domain_was_mem:
         for ds in phase1_domain_skeletons:
             if ds["domain_name"] == domain_name:
@@ -667,7 +618,7 @@ def process_files(
     mem_to_oneoff_name    = changes["mem_to_oneoff"]["domain_name"]
     added_domains         = shift_data.get("added_domains", [])  # [added_mem, added_oneoff?]
 
-    # ── Step 1: 전환 서사 생성 ────────────────────────────────────────────
+    # ── Step 1: Generate transition narrative ────────────────────────────────────────────
     try:
         narrative = generate_narrative(
             llm, persona, total_months,
@@ -683,10 +634,10 @@ def process_files(
     }
     print(f"  {uuid[:8]}: transition='{transition_event['name']}'")
 
-    # ── Step 2: Phase 2 도메인 구성 ──────────────────────────────────────
+    # ── Step 2: Build Phase 2 domains ──────────────────────────────────────
     # memory_required=True skeletons
-    #   retained: Phase 1 mem 도메인 중 mem_to_oneoff가 아닌 것
-    #   added:    added_domains 중 memory_required=True
+    #   retained: Phase 1 mem domains not in mem_to_oneoff
+    #   added:    added_domains with memory_required=True
     retained_mem_domains = [
         {
             "domain_name": ds["domain_name"],
@@ -704,9 +655,9 @@ def process_files(
     )
 
     # oneoff sessions
-    #   demoted:  mem_to_oneoff 도메인 (Phase 1 mem → Phase 2 oneoff)
-    #   retained: Phase 1 기존 oneoff 도메인 (모두 유지)
-    #   added:    added_domains 중 memory_required=False
+    #   demoted:  mem_to_oneoff domains (Phase 1 mem → Phase 2 oneoff)
+    #   retained: existing Phase 1 oneoff domains (all kept)
+    #   added:    added_domains with memory_required=False
     demoted_domain = {
         "domain_name": mem_to_oneoff_name,
         "frequency": changes["mem_to_oneoff"].get("frequency", "medium"),
@@ -728,7 +679,7 @@ def process_files(
         + [(d, False) for d in added_oneoff_domains]
     )[:MAX_ONEOFF_DOMAINS_PHASE2]
 
-    # ── Step 3: Skeleton 생성 ────────────────────────────────────────────
+    # ── Step 3: Generate skeleton ────────────────────────────────────────────
     domain_skeletons_phase2 = []
     errors = []
 
@@ -764,7 +715,7 @@ def process_files(
             errors.append({"domain_name": domain["domain_name"], "error": str(e)})
             print(f"    ✗ skeleton [{stype}] {domain['domain_name']}: {e}")
 
-    # ── Step 4: One-off 세션 생성 ────────────────────────────────────────
+    # ── Step 4: Generate one-off sessions ────────────────────────────────────────
     oneoff_sessions_phase2 = []
 
     for domain, was_mem in tqdm(oneoff_targets, desc=f"  {uuid[:8]} oneoff", leave=False):
@@ -783,7 +734,7 @@ def process_files(
             errors.append({"domain_name": domain["domain_name"], "error": str(e)})
             print(f"    ✗ oneoff {domain['domain_name']}: {e}")
 
-    # ── 저장 ────────────────────────────────────────────────────────────
+    # ── Save ────────────────────────────────────────────────────────────
     output = {
         "uuid": uuid,
         "persona": persona,
@@ -814,7 +765,7 @@ def main():
     parser = argparse.ArgumentParser(description="Stage 2.3: Generate Phase 2 Life Skeletons")
     parser.add_argument("--timeline_file", type=str, default=None)
     parser.add_argument("--shift_file",    type=str, default=None)
-    parser.add_argument("--timeline_dir",  type=str, default="./life_timelines_v5")
+    parser.add_argument("--timeline_dir",  type=str, default="./life_timelines")
     parser.add_argument("--shift_dir",     type=str, default="./pattern_shifts")
     parser.add_argument("--output_dir",    type=str, default="./phase2_skeletons")
     parser.add_argument("--provider",      type=str, default="openai")

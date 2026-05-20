@@ -1,9 +1,3 @@
-"""
-OpenAI, Claude(Anthropic), Together AI, Gemini(Google)를 하나의 인터페이스로 사용하는 클래스.
-.env에 OPENAI_API_KEY, ANTHROPIC_API_KEY, TOGETHER_API_KEY, GOOGLE_API_KEY 설정.
-"""
-
-import os
 from typing import Literal
 
 from dotenv import load_dotenv
@@ -25,12 +19,12 @@ ENV_KEYS: dict[Provider, str] = {
     "claude": "ANTHROPIC_API_KEY",
     "together": "TOGETHER_API_KEY",
     "gemini": "GOOGLE_API_KEY",
-    "vllm": "",  # vLLM은 API 키 불필요 (또는 임의값)
+    "vllm": "",  # vLLM does not require an API key (any value works)
 }
 
 
 class UnifiedLLM:
-    """OpenAI / Claude / Together AI API를 통합한 채팅 클래스."""
+    """Unified chat client for OpenAI / Claude / Together AI APIs."""
 
     def __init__(
         self,
@@ -40,12 +34,12 @@ class UnifiedLLM:
         temperature: float = 0.0,
     ):
         self.provider = provider
-        self.base_url = base_url  # vLLM 서버 URL 등 커스텀 base URL
+        self.base_url = base_url  # custom base URL (e.g. vLLM server)
         self.temperature = temperature
         self._api_key = os.environ.get(ENV_KEYS[provider]) if ENV_KEYS[provider] else None
         if not self._api_key and provider != "vllm":
             raise ValueError(
-                f"{provider} 사용을 위해 {ENV_KEYS[provider]}를 .env 또는 api_key 인자로 설정하세요."
+                f"Set {ENV_KEYS[provider]} in .env or pass api_key to use {provider}."
             )
         self.model = model or DEFAULT_MODELS[provider]
         self._openai_client = None
@@ -85,7 +79,7 @@ class UnifiedLLM:
         from openai import OpenAI
         if self._vllm_client is None:
             base = self.base_url or "http://localhost:8000/v1"
-            # vLLM OpenAI-compatible 엔드포인트
+            # vLLM OpenAI-compatible endpoint
             if not base.endswith("/v1"):
                 base = base.rstrip("/") + "/v1"
             self._vllm_client = OpenAI(api_key="vllm", base_url=base)
@@ -97,12 +91,7 @@ class UnifiedLLM:
         system: str | None = None,
         model: str | None = None,
     ) -> str:
-        """
-        프롬프트를 보내고 응답 텍스트를 반환합니다.
-        :param prompt: 사용자 메시지
-        :param system: 시스템/지시 메시지 (선택)
-        :param model: 모델 오버라이드 (선택)
-        """
+
         model = model or self.model
 
         if self.provider == "openai":
@@ -124,11 +113,7 @@ class UnifiedLLM:
         model: str | None = None,
         tools: list[dict] | None = None,
     ) -> str:
-        """
-        대화 기록을 넘기고 다음 assistant 응답을 생성합니다.
-        messages: [{"role": "user"|"assistant", "content": "..."}, ...], 마지막은 "user"여야 함.
-        tools: OpenAI만 지원. 예: [{"type": "web_search"}] → Responses API로 웹 검색 후 응답.
-        """
+
         model = model or self.model
         if self.provider == "openai" and tools is not None:
             return self._chat_messages_openai_responses(messages, system, model, tools)
@@ -167,7 +152,7 @@ class UnifiedLLM:
         model: str,
         tools: list[dict],
     ) -> str:
-        """OpenAI Responses API 사용 (예: web_search 툴)."""
+        """Use OpenAI Responses API (e.g. web_search tool)."""
         client = self._get_openai_client()
         parts = []
         if system:
@@ -285,7 +270,7 @@ class UnifiedLLM:
         if system:
             kwargs["system"] = system
         response = client.messages.create(**kwargs)
-        # content는 ContentBlock 리스트, 텍스트는 content[0].text
+        # content is a ContentBlock list; text is content[0].text
         if not response.content:
             return ""
         return response.content[0].text
@@ -326,7 +311,7 @@ class UnifiedLLM:
 
 
 if __name__ == "__main__":
-    # 사용 예시 (설정된 API 키에 따라 하나만 동작할 수 있음)
+    # usage example (only one provider may work depending on configured API keys)
     for provider in ("openai", "claude", "together", "gemini", "vllm"):
         try:
             llm = UnifiedLLM(provider=provider)

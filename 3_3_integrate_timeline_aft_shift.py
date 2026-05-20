@@ -1,44 +1,3 @@
-"""
-2_4_integrate_phase2_timeline.py
-
-Stage 2.4: Phase 1 + Phase 2 통합 타임라인 생성.
-
-2_1과 동일한 방식으로 Phase 2 skeleton을 타임라인으로 만들되,
-  - LLM은 memory_required=True 이벤트 배치만 담당
-  - one-off는 프로그래매틱 배치 (2_1의 merge_oneoff_sessions 재사용)
-  - Phase 2 month는 Phase 1 total_months를 기준으로 offset 적용
-  - session_id는 Phase 1과 연속되게 이어짐
-
-출력: extended_timelines/{uuid}.json
-  {
-    "uuid": "...",
-    "persona": {...},
-    "phase1": {
-      "total_months": 24,
-      "sessions": [...]        # Phase 1 세션들 (session_id 1~N)
-    },
-    "phase2": {
-      "transition_event": {...},
-      "total_months": 12,
-      "month_offset": 24,      # Phase 1 total_months
-      "sessions": [...]        # Phase 2 세션들 (session_id N+1 ~)
-    },
-    "all_sessions": [...],     # Phase 1 + Phase 2 합본 (session_id 연속)
-    "validation_warnings": [...]
-  }
-
-Usage:
-  python 2_4_integrate_phase2_timeline.py \\
-      --timeline_file ./life_timelines/uuid.json \\
-      --phase2_file ./phase2_skeletons/uuid.json \\
-      --output_dir ./extended_timelines
-
-  python 2_4_integrate_phase2_timeline.py \\
-      --timeline_dir ./life_timelines \\
-      --phase2_dir ./phase2_skeletons \\
-      --output_dir ./extended_timelines
-"""
-
 import json
 import os
 import argparse
@@ -218,11 +177,7 @@ def generate_phase2_timeline(
 
 
 def merge_oneoff_sessions_phase2(timeline: dict, oneoff_sessions: list) -> dict:
-    """
-    Phase 2 one-off 세션을 timeline에 병합.
-    2_1의 merge_oneoff_sessions와 동일한 로직.
-    Phase 2 month는 이미 1-based relative → offset은 2_4 최종 단계에서 처리.
-    """
+    
     if not oneoff_sessions:
         return timeline
 
@@ -280,7 +235,7 @@ def merge_oneoff_sessions_phase2(timeline: dict, oneoff_sessions: list) -> dict:
 
 
 def validate_phase2_timeline(timeline: dict, domain_skeletons: list) -> list[str]:
-    """memory_required=True 세션 유효성 검사."""
+    """Validate memory_required=True sessions."""
     warnings = []
 
     expected = set()
@@ -325,14 +280,14 @@ def validate_phase2_timeline(timeline: dict, domain_skeletons: list) -> list[str
 
 
 def apply_month_offset(sessions: list, offset: int) -> list:
-    """Phase 2 relative months → absolute months (Phase 1 기준 offset 적용)."""
+    """Convert Phase 2 relative months to absolute (offset from Phase 1)."""
     for s in sessions:
         s["month"] = s["month"] + offset
     return sessions
 
 
 def apply_session_id_offset(sessions: list, offset: int) -> list:
-    """Phase 2 session_id를 Phase 1 마지막 session_id 이후로 이어 붙임."""
+    """Continue Phase 2 session_ids after Phase 1 last session_id."""
     for s in sessions:
         s["session_id"] = s["session_id"] + offset
     return sessions
@@ -466,7 +421,7 @@ def main():
                         help="Single Phase 1 timeline file")
     parser.add_argument("--phase2_file", type=str, default=None,
                         help="Single Phase 2 skeleton file")
-    parser.add_argument("--timeline_dir", type=str, default="./life_timelines_v5",
+    parser.add_argument("--timeline_dir", type=str, default="./life_timelines",
                         help="Phase 1 timeline directory")
     parser.add_argument("--phase2_dir", type=str, default="./phase2_skeletons",
                         help="Phase 2 skeleton directory")

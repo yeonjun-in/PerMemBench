@@ -1,12 +1,3 @@
-"""
-memory_bank.py
-
-VectorDB 기반 Memory Bank.
-- Entry 단위: user-agent 1 turn = 1 entry
-- Embedding: OpenAI text-embedding-3-small 또는 SentenceBERT
-- Token 한도 초과 시 삭제 전략 적용
-"""
-
 import json
 import uuid
 import time
@@ -31,11 +22,11 @@ except ImportError:
 @dataclass
 class MemoryEntry:
     entry_id: str
-    session_idx: int        # cold_start은 -1
-    session_file: str       # 출처 파일명
-    turn_idx: int           # 해당 세션 내 turn index (0-based, user-agent pair 기준)
+    session_idx: int        # -1 for cold_start
+    session_file: str       # source filename
+    turn_idx: int           # turn index within session (0-based, per user-agent pair)
     domain_name: str
-    content: str            # raw text 또는 key fact/summary
+    content: str            # raw text or key fact/summary
     keywords: list[str]
     importance_score: float # 0~1
     timestamp: float        # time.time()
@@ -115,13 +106,13 @@ class MemoryBank:
     # ────────────────────────────────
 
     def add(self, entry: MemoryEntry) -> None:
-        """entry를 bank에 추가. embedding이 없으면 자동 생성."""
+        """Add entry to bank; auto-generate embedding if missing."""
         if entry.embedding is None:
             entry.embedding = self.embedder.embed_one(entry.content)
         self.entries.append(entry)
 
     def add_batch(self, entries: list[MemoryEntry]) -> None:
-        """embedding이 없는 entry들을 batch embed 후 추가."""
+        """Batch-embed entries without embeddings, then add."""
         no_emb = [e for e in entries if e.embedding is None]
         if no_emb:
             texts = [e.content for e in no_emb]
@@ -135,7 +126,7 @@ class MemoryBank:
     # ────────────────────────────────
 
     def retrieve(self, query: str, top_k: int = 5) -> list[MemoryEntry]:
-        """Semantic retrieval. top_k개 반환."""
+        """Semantic retrieval; return top_k entries."""
         if not self.entries:
             return []
         query_emb = self.embedder.embed_one(query)
@@ -146,7 +137,7 @@ class MemoryBank:
         return [self.entries[i] for i in top_indices]
 
     def retrieve_with_scores(self, query: str, top_k: int = 5) -> list[tuple[MemoryEntry, float]]:
-        """(entry, score) 쌍으로 반환."""
+        """Return (entry, score) pairs."""
         if not self.entries:
             return []
         query_emb = self.embedder.embed_one(query)
@@ -166,18 +157,14 @@ class MemoryBank:
         return len(self.entries) < before
 
     def enforce_token_limit(self, strategy: str = 'oldest_first') -> list[str]:
-        """
-        token 한도 초과 시 삭제 실행.
-        strategy: 'oldest_first' | 'importance_based'
-        반환: 삭제된 entry_id 목록
-        """
+        
         deleted = []
         while self.total_tokens > self.max_tokens and self.entries:
             if strategy == 'oldest_first':
-                # 가장 오래된 entry 삭제
+                # delete oldest entry
                 target = min(self.entries, key=lambda e: e.timestamp)
             elif strategy == 'importance_based':
-                # importance 낮은 것 중 가장 오래된 것 삭제
+                # delete oldest among lowest-importance entries
                 sorted_entries = sorted(
                     self.entries,
                     key=lambda e: (e.importance_score, e.timestamp)
@@ -196,7 +183,7 @@ class MemoryBank:
     # ────────────────────────────────
 
     def update_entry(self, entry_id: str, new_content: str, new_keywords: list[str] = None) -> bool:
-        """기존 entry 내용 업데이트. embedding 재계산."""
+        """Update existing entry content; recompute embedding."""
         for e in self.entries:
             if e.entry_id == entry_id:
                 e.content = new_content
@@ -208,7 +195,7 @@ class MemoryBank:
 
     def merge_entries(self, entry_ids: list[str], merged_content: str,
                       merged_keywords: list[str], importance_score: float) -> MemoryEntry:
-        """여러 entry를 하나로 합치고 원본 삭제."""
+        """Merge multiple entries into one and delete originals."""
         sources = [e for e in self.entries if e.entry_id in entry_ids]
         if not sources:
             raise ValueError("No matching entries found")
@@ -236,7 +223,7 @@ class MemoryBank:
     # ────────────────────────────────
 
     def find_by_session_turn(self, session_file: str, turn_idx: int) -> Optional[MemoryEntry]:
-        """특정 세션의 특정 turn이 저장되어 있는지 확인 (평가용)."""
+        """Check whether a given session turn is stored (for evaluation)."""
         for e in self.entries:
             if e.session_file == session_file and e.turn_idx == turn_idx:
                 return e

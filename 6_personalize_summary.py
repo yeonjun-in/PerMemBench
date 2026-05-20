@@ -1,30 +1,3 @@
-#!/usr/bin/env python3
-"""
-7_personalize_summary.py
-
-Adaptive Personalized Memory Policy 평가 스크립트.
-
-LLM이 아래 정보를 보고 매 세션마다 예측:
-  1. 현재 세션의 raw dialogue
-  2. 과거 K개 세션의 요약(summary) 히스토리
-
-  → 예측: memory_required 여부 (long-horizon vs transient)
-
-또한 각 세션 종료 후, 해당 세션을 1~2문장으로 요약해 저장하고
-다음 세션들의 히스토리 컨텍스트로 사용한다.
-
-평가 Metric:
-  - required_accuracy : memory_required 예측 정확도 (per session)
-
-Usage:
-    python 7_personalize_summary.py \
-        --data_dir ./skeleton_dialogues_v5 \
-        --output_dir ./results/personalize_summary \
-        --llm_model gpt-5-mini \
-        --history_k 3 \
-        --uuid 00aefb8e6cfd47dc939d6d3b30a5aefb
-"""
-
 import argparse
 import csv
 import json
@@ -43,11 +16,11 @@ from LLM import UnifiedLLM
 # ========================
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_dir', type=str, default='./skeleton_dialogues_v5')
+parser.add_argument('--data_dir', type=str, default='./skeleton_dialogues')
 parser.add_argument('--output_dir', type=str, default='./results/personalize_summary')
 parser.add_argument('--llm_model', type=str, default='gpt-5-mini')
-parser.add_argument('--current_chars', type=int, default=2000, help='현재 세션 dialogue 최대 문자수')
-parser.add_argument('--history_k', type=int, default=5, help='참조할 과거 세션 summary 개수')
+parser.add_argument('--current_chars', type=int, default=2000, help='Max characters of current session dialogue')
+parser.add_argument('--history_k', type=int, default=5, help='Number of past session summaries to include')
 parser.add_argument('--uuid', type=str, default=None)
 parser.add_argument('--limit', type=int, default=None)
 args = parser.parse_args()
@@ -213,7 +186,7 @@ def process_uuid(
         session_id = session.get('session_id', 0)
         gt_required = session.get('memory_required', True)
 
-        # 현재 세션 예측 시에는 과거 요약만 사용한다.
+        # For current-session prediction, use past summaries only.
         history_for_prompt = summary_memory[-history_k:] if history_k > 0 else []
 
         pred = predict_session(

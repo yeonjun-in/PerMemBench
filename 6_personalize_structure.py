@@ -1,51 +1,3 @@
-#!/usr/bin/env python3
-"""
-7_personalize_note.py
-
-Personal Note 기반 Adaptive Memory Policy 평가 스크립트.
-
-## 동작 원리
-
-매 세션마다 LLM이 경량 session record를 생성한다:
-  { session_id, purpose, summary, topic }
-
-매 K 세션마다 personal note를 업데이트한다:
-  - 기존 personal_note + 새 K개 session record → 업데이트된 personal_note
-  - personal_note는 윈도우를 넘어서 계속 이월·누적됨 (초기화 없음)
-  - 기존 isolated_sessions를 project로 소급 흡수 가능
-  - 기존 project에 새 세션을 연결 가능
-
-personal_note 스키마:
-  {
-    "projects": [
-      {
-        "project_id": "P1",
-        "label": "캐시 시스템 개발",
-        "core_topic": "Python 웹앱 캐싱 아키텍처",
-        "session_ids": [1, 3, 6, 8],
-        "status": "ongoing" | "completed"
-      }
-    ],
-    "isolated_sessions": [2, 5, 7]
-  }
-
-분류 규칙:
-  - isolated_sessions  → memory_required = false
-  - projects에 속하면 → memory_required = true
-  - 아직 어떤 윈도우도 끝나지 않아 personal_note에 미등재 → 보수적으로 true
-
-메모리 삭제 방식:
-  - 모든 세션은 일단 저장, 윈도우가 끝난 후 isolated_sessions에 해당하는 memory를 삭제
-
-Usage:
-    python 7_personalize_note.py \\
-        --data_dir ./skeleton_dialogues_v5 \\
-        --output_dir ./results/personalize_note \\
-        --llm_model gpt-4o-mini \\
-        --window_k 10 \\
-        --uuid 00aefb8e6cfd47dc939d6d3b30a5aefb
-"""
-
 import argparse
 import csv
 import json
@@ -65,13 +17,13 @@ from LLM import UnifiedLLM
 # ========================
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_dir',      type=str, default='./skeleton_dialogues_v5')
-parser.add_argument('--output_dir',    type=str, default='./results/personalize_note')
+parser.add_argument('--data_dir',      type=str, default='./skeleton_dialogues')
+parser.add_argument('--output_dir',    type=str, default='./results/personalize_structure')
 parser.add_argument('--llm_model',     type=str, default='gpt-5-mini')
 parser.add_argument('--window_k',      type=int, default=10,
-                    help='몇 세션마다 personal note를 업데이트할지')
+                    help='Update personal note every N sessions')
 parser.add_argument('--current_chars', type=int, default=2000,
-                    help='세션 dialogue 최대 문자수 (session record 생성 시)')
+                    help='Max session dialogue characters when building session records')
 parser.add_argument('--uuid',          type=str, default=None)
 parser.add_argument('--limit',         type=int, default=None)
 args = parser.parse_args()
@@ -191,7 +143,7 @@ def parse_llm_json(raw: str) -> dict:
 # ========================
 
 def extract_session_record(llm: UnifiedLLM, session: dict, current_chars: int) -> dict:
-    """세션 하나에서 {purpose, summary, topic}을 추출한다."""
+    """Extract {purpose, summary, topic} from one session."""
     dialogue_text = dialogue_to_text(session.get('dialogue', []), current_chars)
     prompt = EXTRACT_PROMPT.format(dialogue=dialogue_text)
     try:
@@ -214,7 +166,7 @@ def update_personal_note(
     current_note: dict,
     window_records: list[dict],
 ) -> dict:
-    """현재 personal_note와 새 window의 session records를 보고 note를 업데이트한다."""
+    """Update personal_note from current note and new window session records."""
     records_text = '\n'.join(
         json.dumps(r, ensure_ascii=False) for r in window_records
     )
@@ -228,13 +180,13 @@ def update_personal_note(
     try:
         raw = llm.chat(prompt)
         updated = parse_llm_json(raw)
-        # 기본 키 보장
+        # ensure required keys
         updated.setdefault('projects', [])
         updated.setdefault('isolated_sessions', [])
         return updated
     except Exception as e:
         print(f"    [WARN] update_personal_note failed: {e}")
-        # 실패 시 기존 note 유지하되 새 세션은 전부 isolated로 넣음
+        # on failure, keep existing note; mark new sessions as isolated
         fallback = dict(current_note)
         fallback['isolated_sessions'] = (
             fallback.get('isolated_sessions', []) + window_ids
@@ -243,13 +195,13 @@ def update_personal_note(
 
 
 # ========================
-# 분류 로직
+# classification logic
 # ========================
 
 def classify_from_note(note: dict) -> dict[int, bool]:
     """
-    personal_note를 기반으로 {session_id: memory_required} 매핑을 반환.
-    projects에 속하면 True, isolated_sessions이면 False.
+    Return {session_id: memory_required} from personal_note.
+    True if in projects; False if in isolated_sessions.
     """
     result: dict[int, bool] = {}
     for project in note.get('projects', []):
@@ -277,8 +229,8 @@ def process_uuid(
         return []
 
     personal_note: dict = empty_note()
-    all_session_records: list[dict] = []   # 추출된 {session_id, purpose, summary, topic}
-    window_buffer: list[dict] = []         # 현재 윈도우에 쌓이는 records
+    all_session_records: list[dict] = []   # extracted {session_id, purpose, summary, topic}
+    window_buffer: list[dict] = []         # records accumulating in current window
     classification: dict[int, bool] = {}   # session_id → memory_required
 
     session_records_out: list[dict] = []
@@ -287,7 +239,7 @@ def process_uuid(
         session_id  = session.get('session_id', 0)
         gt_required = session.get('memory_required', True)
 
-        # ── Step 1: session record 추출 ──────────────────────
+        # ── Step 1: extract session records ──────────────────────
         t0 = time.time()
         record = extract_session_record(llm, session, current_chars)
         print(f"    [S{session_id:02d}] extract: {time.time()-t0:.2f}s  topic={record.get('topic','')}")
@@ -295,7 +247,7 @@ def process_uuid(
         all_session_records.append(record)
         window_buffer.append(record)
 
-        # ── Step 2: 윈도우가 가득 찼으면 personal_note 업데이트 ──
+        # ── Step 2: update personal_note when window is full ──
         if len(window_buffer) >= window_k:
             t0 = time.time()
             personal_note = update_personal_note(llm, personal_note, window_buffer)
@@ -304,10 +256,10 @@ def process_uuid(
             print(f"      isolated: {personal_note.get('isolated_sessions', [])}")
             window_buffer = []
 
-            # 업데이트된 note로 분류 갱신 (소급 수정 포함)
+            # refresh classification from updated note (retroactive)
             classification = classify_from_note(personal_note)
 
-    # ── 남은 buffer 처리 (마지막 윈도우가 window_k 미만인 경우) ──
+    # ── flush remaining buffer (last window smaller than window_k) ──
     if window_buffer:
         t0 = time.time()
         personal_note = update_personal_note(llm, personal_note, window_buffer)
@@ -317,11 +269,11 @@ def process_uuid(
         window_buffer = []
         classification = classify_from_note(personal_note)
 
-    # ── 평가 레코드 생성 ──────────────────────────────────────
+    # ── build evaluation records ──────────────────────────────────────
     for session in sessions:
         session_id  = session.get('session_id', 0)
         gt_required = session.get('memory_required', True)
-        # personal_note에 아직 미등재이면 보수적으로 True
+        # if not in personal_note yet, default conservatively to True
         pred_required = classification.get(session_id, True)
         required_correct = (pred_required == gt_required)
 
@@ -339,7 +291,7 @@ def process_uuid(
     n       = len(session_records_out)
     req_acc = sum(r['required_correct'] for r in session_records_out) / n if n else None
 
-    # ── 결과 저장 ────────────────────────────────────────────
+    # ── save results ────────────────────────────────────────────
     uuid_result = {
         'uuid':              uuid,
         'n_sessions':        n,

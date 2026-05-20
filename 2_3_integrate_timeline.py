@@ -1,50 +1,3 @@
-"""
-2_1_integrate_timeline_v3.py
-
-Stage 2: Cross-domain timeline integration.
-
-Takes the per-domain Life Skeletons (output of 2_0_generate_life_skeleton_v4.py) and
-one-off session events (injected by 2_0b_generate_oneoff_sessions_v3.py), then produces
-a single unified session timeline.
-
-Design:
-  - LLM is responsible ONLY for placing memory_required=True events on the timeline.
-    It handles: anchor life event detection, cross-domain linking, project sequentiality,
-    and realistic interleaving across longitudinal domains.
-  - memory_required=False (one-off) sessions are placed programmatically after the LLM
-    call, using frequency-based sequential placement derived from interval_weeks stored
-    in each oneoff domain block (set by 2_0b).
-
-One-off session placement:
-  For each domain block, events are placed starting at month=interval_months,
-  incrementing by interval_months each time. Events whose computed month exceeds
-  the actual total_months from the LLM timeline are silently dropped. This means
-  the final session count naturally adapts to the real timeline duration without
-  requiring any re-generation.
-
-Pipeline position:
-  2_0  -> life_skeletons/{uuid}.json
-  2_0b -> injects oneoff_sessions[] into life_skeletons/{uuid}.json
-  2_1  -> life_timelines/{uuid}.json   <- this script
-
-Usage:
-    # single file
-    python 2_1_integrate_timeline_v3.py \\
-        --input_file ./life_skeletons/0a0dcec0.json \\
-        --output_dir ./life_timelines
-
-    # full directory
-    python 2_1_integrate_timeline_v3.py \\
-        --input_dir ./life_skeletons \\
-        --output_dir ./life_timelines
-
-    # with specific model
-    python 2_1_integrate_timeline_v3.py \\
-        --input_dir ./life_skeletons \\
-        --output_dir ./life_timelines \\
-        --provider openai --model gpt-4o
-"""
-
 import json
 import os
 import argparse
@@ -181,7 +134,7 @@ def format_persona(persona_dict: dict) -> str:
 
 
 def build_skeleton_summary(domain_skeletons: list) -> str:
-    """Compact summary of all memory_required=True domain skeletons for the prompt."""
+
     lines = []
     for ds in domain_skeletons:
         domain = ds["domain_name"]
@@ -200,7 +153,7 @@ def build_skeleton_summary(domain_skeletons: list) -> str:
 
 
 def build_event_inventory(domain_skeletons: list) -> str:
-    """Flat list of all (domain, project_id, event_id, title) for memory_required=True events."""
+
     lines = ["domain | project_id | event_id | event_title"]
     lines.append("-" * 70)
     for ds in domain_skeletons:
@@ -214,7 +167,7 @@ def build_event_inventory(domain_skeletons: list) -> str:
 
 
 def estimate_max_month(domain_skeletons: list) -> int:
-    """Rough upper bound: sum of all project durations, capped at 24."""
+
     total = 0
     for ds in domain_skeletons:
         total += len(ds["skeleton"].get("projects", [])) * 3
@@ -237,23 +190,7 @@ def count_oneoff_events(oneoff_sessions: list) -> int:
 
 
 def merge_oneoff_sessions(timeline: dict, oneoff_sessions: list) -> dict:
-    """
-    Programmatically place memory_required=False one-off sessions into the timeline
-    using frequency-based sequential placement, then re-sort and reassign session_ids.
 
-    Placement logic per domain:
-      - interval_months = interval_weeks / WEEKS_PER_MONTH  (from domain_block)
-      - Place first event at month = round(interval_months)
-      - Each subsequent event: month += round(interval_months)  [cumulative]
-      - If month > total_months: TRUNCATE — drop this and all remaining events
-
-    total_months comes from the actual LLM-generated timeline, NOT the pre-estimated
-    value from 2_0b. Events generated in 2_0b that fall outside the real timeline
-    are silently dropped, so the final session count naturally adapts to the actual
-    timeline duration without requiring re-generation.
-
-    Fallback: if interval_weeks is missing, defaults to DEFAULT_INTERVAL_WEEKS (8w).
-    """
     if not oneoff_sessions:
         return timeline
 
@@ -318,11 +255,7 @@ def validate_timeline(
     timeline: dict,
     domain_skeletons: list,
 ) -> list:
-    """
-    Validates memory_required=True sessions only:
-    - All expected events are present (no missing, no duplicates)
-    - Project order is respected within each domain
-    """
+
     warnings = []
 
     expected = set()
@@ -379,7 +312,6 @@ def generate_timeline(
     persona: dict,
     domain_skeletons: list,
 ) -> dict:
-    """Call LLM to place memory_required=True events on a timeline."""
     persona_text = format_persona(persona)
     skeleton_summary = build_skeleton_summary(domain_skeletons)
     event_inventory = build_event_inventory(domain_skeletons)
@@ -485,7 +417,7 @@ def main():
                         help="Path to a single life skeleton JSON file")
     parser.add_argument("--input_dir", type=str, default=None,
                         help="Directory containing life skeleton JSON files")
-    parser.add_argument("--output_dir", type=str, default="./life_timelines_v5",
+    parser.add_argument("--output_dir", type=str, default="./life_timelines",
                         help="Output directory (default: ./life_timelines)")
     parser.add_argument("--provider", type=str, default="openai",
                         help="LLM provider: openai | claude | together | gemini")

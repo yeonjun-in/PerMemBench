@@ -1,45 +1,3 @@
-#!/usr/bin/env python3
-"""
-7_longitudinal_eval.py
-
-Longitudinal Evaluation: 각 fact 가 등장한 시점부터 유효 기간 끝까지
-매 세션 snapshot 을 이용해 평가.
-
-가정:
-  - user_profile fact  → source_session ~ 마지막 세션까지 기억되어야 함
-  - ongoing_state fact → source_session ~ 동일 (domain, project_id) 의 마지막 세션까지
-
-입력:
-  --snapshot_dir   : 기존 eval 이 생성한 snapshot 루트
-                     구버전: {snapshot_dir}/{uuid}/session_{id:04d}.json
-                     신버전: {snapshot_dir}/{system_label}/{uuid}/session_{id:04d}.json
-  --skeleton_dir   : skeleton_dialogues_v4 경로
-  --output_dir     : 결과 저장 경로
-
-출력 (output_dir 내):
-  per_fact/
-    {uuid}.json     : 각 fact 별 세션-단위 점수 + 4개 집계 metric
-  aggregate.csv     : fact 단위 집계 (한 row = 한 fact)
-  summary.json      : 전체 / gt_type 별 평균
-
-Metrics (per fact):
-  retention_rate       : write=1 인 세션 수 / 평가 대상 세션 수
-  retrieval_rate       : read score 평균
-  avg_qa_score         : QA score 평균
-  first_failure_session: write=0 이 처음 등장하는 세션 id (없으면 null)
-
-Usage:
-  python 7_longitudinal_eval.py \\
-    --snapshot_dir  ./snapshots/mem0_budget_token5000_dv4/mem0_turn \\
-    --skeleton_dir  ./skeleton_dialogues_v4 \\
-    --output_dir    ./longitudinal_results/mem0_turn \\
-    --top_k 5 \\
-    --write_top_k   10 \\
-    --agent_model   gpt-4.1-mini \\
-    --judge_model   gpt-4.1-mini \\
-    --uuid          0045d22ab1144febbe2656f775efc841
-"""
-
 import argparse
 import csv
 import json
@@ -60,31 +18,31 @@ from memory_bank import EmbeddingModel, cosine_similarity
 # ──────────────────────────────────────────────
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--snapshot_dir",  default='results/run_mem0/sys=mem0__gran=turn__bud=-1_400__mllm=vllm-Qwen-Qwen3-14B__d=v5/snapshots')
-parser.add_argument("--skeleton_dir",  default="./skeleton_dialogues_v5")
-parser.add_argument("--output_dir",    default='longitudinal_results')
-parser.add_argument("--uuid",          default='036886affea947b48448038332105e45', help="단일 UUID 처리 (생략 시 전체)")
+parser.add_argument("--snapshot_dir",  default='')
+parser.add_argument("--skeleton_dir",  default="./skeleton_dialogues")
+parser.add_argument("--output_dir",    default='memory_retention_results')
+parser.add_argument("--uuid",          default='036886affea947b48448038332105e45', help="Process a single UUID (default: all)")
 parser.add_argument("--top_k",         type=int, default=5)
 parser.add_argument("--write_top_k",   type=int, default=10,
-                    help="Write 평가용 fact 기반 retrieval top-k "
-                         "(전체 메모리 대신 fact 유사 상위 N 개만 judge 에 넘김)")
+                    help="Top-k fact-based retrieval for write eval "
+                         "(pass only top-N fact-similar candidates to judge, not full memory)")
 parser.add_argument("--agent_model",       default="gpt-5-nano")
 parser.add_argument("--judge_model",       default="gpt-5-nano")
 parser.add_argument("--agent_temperature", type=float, default=0.0,
-                    help="Agent LLM temperature (기본값: 0.0)")
+                    help="Agent LLM temperature (default: 0.0)")
 parser.add_argument("--judge_temperature", type=float, default=0.0,
-                    help="Judge LLM temperature (기본값: 0.0)")
+                    help="Judge LLM temperature (default: 0.0)")
 parser.add_argument("--embedding_provider", default="sentence_transformers",
                     choices=["openai", "sentence_transformers"])
 parser.add_argument("--embedding_model",    default="all-MiniLM-L6-v2",
                     choices=["text-embedding-3-small", "all-MiniLM-L6-v2"])
 parser.add_argument("--skip_existing", action="store_true", default=False,
-                    help="per_fact JSON 이 이미 존재하는 UUID 는 재평가 없이 summary 만 집계")
+                    help="If per_fact JSON exists, skip re-eval and only aggregate summary")
 args = parser.parse_args()
 
 
 # ──────────────────────────────────────────────
-# Prompts  (6_static_eval_v11 과 동일)
+# Prompts (same as 6_static_eval_v11)
 # ──────────────────────────────────────────────
 
 BINARY_JUDGE_PROMPT = """\
@@ -144,9 +102,9 @@ def sample_even_with_ends(arr, k):
     if n == k:
         return arr
     if k < 2:
-        raise ValueError("k는 최소 2여야 함 (첫/마지막 포함 조건)")
+        raise ValueError("k must be at least 2 (includes first and last)")
     if k > n:
-        raise ValueError("중복 없이 뽑으려면 k <= len(arr) 이어야 함")
+        raise ValueError("need k <= len(arr) for sampling without replacement")
 
     idx = [round(i * (n - 1) / (k - 1)) for i in range(k)]
     return [arr[i] for i in idx]
@@ -189,7 +147,7 @@ def build_memory_context(memory_texts: list[str]) -> str:
 def run_qa(llm_agent: UnifiedLLM, llm_judge: UnifiedLLM,
            probing_question: str, gt_answer: str,
            retrieved_texts: list[str]) -> tuple[float, str]:
-    """QA score 와 agent 응답 반환."""
+    """Return QA score and agent response."""
     memory_context = build_memory_context(retrieved_texts)
     agent_prompt = QA_AGENT_PROMPT.format(
         memory_context=memory_context, question=probing_question
@@ -239,18 +197,10 @@ def discover_snapshot_uuid_dirs(
     snapshot_root: Path,
     target_uuid: str | None = None,
 ) -> dict[str, Path]:
-    """
-    snapshot_root 아래에서 UUID별 snapshot 디렉터리를 자동 탐지.
 
-    지원 구조:
-      - 구버전: {snapshot_root}/{uuid}/session_*.json
-      - 신버전: {snapshot_root}/{system_label}/{uuid}/session_*.json
-
-    동일 UUID 후보가 여러 개면 session 파일 개수가 가장 많은 경로를 선택.
-    """
     candidates: dict[str, list[Path]] = {}
 
-    # 1) 구버전 구조 탐색
+    # 1) search legacy layout
     if snapshot_root.exists():
         for d in sorted(snapshot_root.iterdir()):
             if not d.is_dir():
@@ -258,7 +208,7 @@ def discover_snapshot_uuid_dirs(
             if has_session_snapshots(d):
                 candidates.setdefault(d.name, []).append(d)
 
-    # 2) 신버전 구조 탐색
+    # 2) search new layout
     if snapshot_root.exists():
         for system_dir in sorted(snapshot_root.iterdir()):
             if not system_dir.is_dir():
@@ -276,7 +226,7 @@ def discover_snapshot_uuid_dirs(
         if len(paths) == 1:
             return {target_uuid: paths[0]}
 
-        # 중복 후보면 session 수가 가장 많은 경로 선택
+        # if duplicate candidates, pick path with most sessions
         scored = sorted(
             paths,
             key=lambda p: (len(list(p.glob("session_*.json"))), str(p)),
@@ -304,7 +254,7 @@ def discover_snapshot_uuid_dirs(
 
 
 def get_memory_texts(snapshot: dict) -> list[str]:
-    """snapshot 의 memories 에서 text 목록 반환."""
+    """Return text list from snapshot memories."""
     texts = []
     for m in snapshot.get("memories", []):
         txt = m.get("memory_text") or m.get("content") or ""
@@ -315,10 +265,10 @@ def get_memory_texts(snapshot: dict) -> list[str]:
 
 def retrieve_top_k(query: str, memory_texts: list[str],
                    embedder: EmbeddingModel, top_k: int) -> list[str]:
-    """embedding cosine similarity 로 top-k memory 반환."""
+    """Return top-k memories by embedding cosine similarity."""
     if not memory_texts:
         return []
-    # memory 수가 top_k 보다 적으면 전부 반환
+    # return all if fewer memories than top_k
     actual_k = min(top_k, len(memory_texts))
     try:
         query_emb = embedder.embed_one(query)           # (D,)
@@ -332,14 +282,11 @@ def retrieve_top_k(query: str, memory_texts: list[str],
 
 
 # ──────────────────────────────────────────────
-# Skeleton helpers: project 종료 세션 계산
+# Skeleton helpers: compute project end sessions
 # ──────────────────────────────────────────────
 
 def build_project_end_map(skeleton_sessions: list[dict]) -> dict[tuple, int]:
-    """
-    (domain, project_id) → 해당 project 의 마지막 session_id.
-    모든 세션을 포함하여 project 의 실제 마지막 세션을 구한다.
-    """
+
     project_last: dict[tuple, int] = {}
     for s in skeleton_sessions:
         domain     = s.get("domain", "")
@@ -368,19 +315,11 @@ def eval_at_snapshot(
     top_k: int,
     write_top_k: int,
 ) -> dict:
-    """
-    하나의 snapshot T 에서 write / read / qa 평가.
 
-    - write : fact 자체를 query 로 embedding top-{write_top_k} 후보를 뽑고
-              그 후보 안에 fact 가 있는지 LLM judge.
-              (전체 메모리를 통째로 넘기면 LLM burden / context limit 문제 발생)
-    - read  : probing_question 으로 top-{top_k} retrieve 후 fact 존재 여부 LLM judge.
-    - qa    : retrieved memories 로 LLM QA.
-    """
     memory_texts = get_memory_texts(snapshot)
 
     # ── Write Score ──────────────────────────────
-    # fact 를 query 로 상위 write_top_k 개 후보를 뽑은 뒤 judge 에 넘김
+    # use fact as query, take top write_top_k candidates, then judge
     
 
     # Measure time for write_candidates
@@ -401,34 +340,10 @@ def eval_at_snapshot(
     t5 = time.time()
     print(f"[TIMER] binary_judge (write): {t5-t4:.3f} sec")
 
-    # # ── Read Score ───────────────────────────────
-    # # probing_question 으로 top_k 개 retrieve → fact 존재 여부 judge
-    # t6 = time.time()
-    # retrieved  = retrieve_top_k(probing_question, memory_texts, embedder, top_k)
     retrieved = write_candidates
-    # t7 = time.time()
-    # print(f"[TIMER] retrieve_top_k (read): {t7-t6:.3f} sec")
-
-    # t8 = time.time()
-    # read_context = build_memory_context(retrieved)
-    # t9 = time.time()
-    # print(f"[TIMER] build_memory_context: {t9-t8:.3f} sec")
-
-    # t10 = time.time()
-    # read_score   = binary_judge(llm_judge, fact, read_context)
     read_score   = 0
-    # t11 = time.time()
-    # print(f"[TIMER] binary_judge (read): {t11-t10:.3f} sec")
-
-    # # ── QA Score ─────────────────────────────────
-    # t12 = time.time()
-    # qa_score, agent_response = run_qa(
-    #     llm_agent, llm_judge, probing_question, gt_answer, retrieved
-    # )
     qa_score = 0
     agent_response = ""
-    # t13 = time.time()
-    # print(f"[TIMER] run_qa: {t13-t12:.3f} sec")
 
     return {
         "session_id":     snapshot["session_id"],
@@ -446,14 +361,7 @@ def eval_at_snapshot(
 # ──────────────────────────────────────────────
 
 def aggregate_metrics(session_scores: list[dict]) -> dict:
-    """
-    session_scores: [{session_id, write, read, qa}, ...]
 
-    retention_rate       : write=1 세션 수 / 전체 평가 세션 수
-    retrieval_rate       : read score 평균
-    avg_qa_score         : qa score 평균
-    first_failure_session: write=0 이 처음 등장하는 session_id (없으면 null)
-    """
     n = len(session_scores)
     if n == 0:
         return {
@@ -503,17 +411,10 @@ def process_uuid(
     write_top_k: int,
     skip_existing: bool,
 ) -> tuple[list[dict], bool]:
-    """
-    한 UUID 처리.
 
-    반환: (aggregate_rows, already_done)
-      - aggregate_rows: aggregate.csv 에 기록할 row 목록
-      - already_done  : True 이면 skip_existing 으로 재평가 없이 로드한 케이스
-                        → main 에서 CSV 중복 기록 방지용
-    """
     per_fact_out = output_dir / "per_fact" / f"{uuid_str}.json"
 
-    # ── skip_existing: 이미 완료된 UUID 는 per_fact JSON 에서 summary 집계용으로만 로드 ──
+    # ── skip_existing: load completed UUID from per_fact JSON for summary only ──
     if skip_existing and per_fact_out.exists():
         print(f"  [SKIP] already done: {uuid_str}")
         with open(per_fact_out) as f:
@@ -532,7 +433,7 @@ def process_uuid(
                 **fact_rec["metrics"],
             }
             rows.append(row)
-        return rows, True   # already_done=True → CSV 에 다시 쓰지 않음
+        return rows, True   # already_done=True → do not write CSV again
 
     # ── Load skeleton sessions ──────────────────
     if not skeleton_uuid_dir.exists():
@@ -585,16 +486,16 @@ def process_uuid(
             if not fact or not probing_question or not gt_answer:
                 continue
 
-            # 유효 기간 결정
+            # determine validity window
             if gt_type == "user_profile":
                 valid_through = last_session_id
             elif gt_type == "ongoing_state":
                 key = (domain, project_id)
                 valid_through = project_end_map.get(key, last_session_id)
             else:
-                continue  # 알 수 없는 type skip
+                continue  # skip unknown type
 
-            # 평가 대상 snapshot session id 목록 (source ~ valid_through)
+            # snapshot session ids to evaluate (source ~ valid_through)
             eval_session_ids = sorted(
                 sid for sid in snapshots
                 if session_id <= sid <= valid_through
@@ -663,7 +564,7 @@ def process_uuid(
         json.dump(all_fact_records, f, ensure_ascii=False, indent=2)
     print(f"  [SAVED] {per_fact_out.name} ({len(all_fact_records)} facts)")
 
-    return aggregate_rows, False   # already_done=False → CSV 에 정상 기록
+    return aggregate_rows, False   # already_done=False → write CSV normally
 
 
 # ──────────────────────────────────────────────
@@ -681,7 +582,7 @@ def main():
     llm_judge = make_llm(args.judge_model, temperature=args.judge_temperature)
     llm_agent = make_llm(args.agent_model, temperature=args.agent_temperature)
 
-    # UUID 목록 + snapshot 경로 매핑 (구버전/신버전 구조 자동 인식)
+    # UUID list + snapshot path mapping (auto legacy/new layout)
     snapshot_uuid_map = discover_snapshot_uuid_dirs(snapshot_root, args.uuid)
     uuid_list = sorted(snapshot_uuid_map.keys())
 
@@ -690,11 +591,11 @@ def main():
     print(f"Output dir   : {output_dir}")
     print(f"UUIDs        : {len(uuid_list)}")
     print(f"top_k        : {args.top_k}  (read/qa)")
-    print(f"write_top_k  : {args.write_top_k}  (write judge 후보)")
+    print(f"write_top_k  : {args.write_top_k}  (write judge candidates)")
     print(f"agent_model  : {args.agent_model}")
     print(f"judge_model  : {args.judge_model}\n")
 
-    # CSV 설정
+    # CSV setup
     agg_csv_path = output_dir / "aggregate.csv"
     csv_fieldnames = [
         "uuid", "source_session_id", "gt_idx", "gt_type",
@@ -708,7 +609,7 @@ def main():
     if write_header:
         agg_writer.writeheader()
 
-    all_rows = []  # summary 집계용 (skip 된 것도 포함)
+    all_rows = []  # for summary aggregation (includes skipped)
 
     for i, uuid_str in enumerate(uuid_list, 1):
         print(f"\n=== [{i}/{len(uuid_list)}] UUID: {uuid_str} ===")
@@ -729,7 +630,7 @@ def main():
             skip_existing=args.skip_existing,
         )
 
-        # already_done=True 이면 CSV 에는 이미 기록됐으므로 중복 기록 skip
+        # if already_done=True, skip duplicate CSV write
         if not already_done:
             for row in rows:
                 agg_writer.writerow(row)

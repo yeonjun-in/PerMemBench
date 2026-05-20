@@ -1,34 +1,3 @@
-#!/usr/bin/env python3
-"""
-7_personalize_greedy.py
-
-Adaptive Personalized Memory Policy 평가 스크립트.
-
-LLM이 아래 정보만 보고 매 세션마다 예측:
-  1. 현재 세션의 raw dialogue (해당 세션 내 정보만 사용)
-
-  → 예측: memory_required 여부 (long-horizon vs transient)
-
-LLM에게 제공하지 않는 것:
-  - memory_required ground truth 필드
-  - 구조화된 profile / metadata
-
-"Greedy(session-only)" 메커니즘:
-  - 과거 세션 정보를 LLM에 제공하지 않음
-  - 매 세션을 독립적으로 보고 판단
-  - memory_required=true는 long-horizon, false는 transient로 해석
-
-평가 Metric:
-  - required_accuracy     : memory_required 예측 정확도 (per session)
-
-Usage:
-    python 7_personalize_greedy.py \\
-        --data_dir ./skeleton_dialogues_v5 \\
-        --output_dir ./results/adaptive_policy \\
-        --llm_model gpt-4o-mini \\
-        --uuid 00aefb8e6cfd47dc939d6d3b30a5aefb
-"""
-
 import argparse
 import json
 import csv
@@ -46,11 +15,11 @@ from LLM import UnifiedLLM
 # ========================
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_dir',      type=str, default='./skeleton_dialogues_v5')
+parser.add_argument('--data_dir',      type=str, default='./skeleton_dialogues')
 parser.add_argument('--output_dir',    type=str, default='./results/personalize_greedy')
 parser.add_argument('--llm_model',     type=str, default='gpt-5-mini')
 parser.add_argument('--current_chars', type=int, default=2000,
-                    help='현재 세션 dialogue 최대 문자수')
+                    help='Max characters of current session dialogue')
 parser.add_argument('--uuid',          type=str, default=None)
 parser.add_argument('--limit',         type=int, default=None)
 args = parser.parse_args()
@@ -176,9 +145,9 @@ def process_uuid(
         session_id  = session.get('session_id', 0)
         gt_required = session.get('memory_required', True)
 
-        # ── LLM 예측 ─────────────────────────────────────────
-        # 입력: current dialogue (session-only)
-        # GT 필드(memory_required)는 절대 넘기지 않음
+        # ── LLM prediction ─────────────────────────────────────────
+        # input: current dialogue (session-only)
+        # never pass GT field (memory_required)
         import time
         start_time = time.time()
         pred = predict_session(
@@ -210,7 +179,7 @@ def process_uuid(
         print(f"    S{session_id:02d} (hist={0:2d})"
               f"  req[{req_icon}] pred={str(pred_required):5s}  gt={str(gt_required):5s}")
 
-    # ── 집계 ─────────────────────────────────────────────────
+    # ── aggregate ─────────────────────────────────────────────────
     n       = len(session_records)
     req_acc = sum(r['required_correct'] for r in session_records) / n if n else None
 
@@ -255,8 +224,8 @@ def main():
     print(f"data_dir         : {data_dir}")
     print(f"output_dir       : {output_dir}")
     print(f"llm_model        : {args.llm_model}")
-    print("history_k        : 0  (session-only: 과거 세션 미사용)")
-    print("history_chars    : 0  (session-only: 과거 세션 미사용)")
+    print("history_k        : 0  (session-only: no past sessions)")
+    print("history_chars    : 0  (session-only: no past sessions)")
     print(f"UUIDs            : {len(uuids)}\n")
 
     # aggregate CSV

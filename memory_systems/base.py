@@ -1,25 +1,25 @@
 """
 memory_systems/base.py
 
-모든 memory system의 공통 추상 인터페이스.
+Common abstract interface for all memory systems.
 
-Token Budget 관리:
-  - 모든 시스템에 동일한 max_tokens 제한 적용 (공정한 비교)
-  - write() 후 post_session()에서 _enforce_token_budget() 자동 호출
-  - oldest-first 삭제 전략: 저장 순서 기준으로 초과분 제거
-  - 각 시스템은 _write_turn() / _delete_entry() / _reset_backend() 구현 필요
+Token budget:
+  - Same max_tokens limit on every system (fair comparison)
+  - _enforce_token_budget() runs automatically in post_session() after write()
+  - oldest-first eviction by insertion order
+  - Each system implements _write_turn() / _delete_entry() / _reset_backend()
 
 Storage granularity:
-  - turn  : write()로 매 turn 개별 처리 (기본)
-  - session: write_session()으로 세션 전체를 한 번에 처리
-             기본 구현은 write()에 위임; Mem0 등은 override하여
-             전체 conversation을 한 번의 add()로 처리
+  - turn  : write() processes each turn individually (default)
+  - session: write_session() processes the whole session at once
+             Default delegates to write(); Mem0 etc. override to call
+             memory.add() once on the full conversation
 
 Write check support:
   - get_write_evidence(session, written_keys) → str
-    평가 파이프라인이 Write check에 사용할 텍스트를 반환.
-    기본: dialogue의 written turn 원본 텍스트 (heuristic용)
-    Mem0 override: Mem0가 실제로 추출·저장한 fact 텍스트 반환
+    Text used by the eval pipeline for write checks.
+    Default: raw text of written turns from dialogue (heuristic)
+    Mem0 override: facts actually extracted and stored by Mem0
 """
 
 from abc import ABC, abstractmethod
@@ -41,7 +41,7 @@ _count_tokens = count_tokens
 
 @dataclass
 class MemoryChunk:
-    """retrieve() 반환 단위."""
+    """Unit returned by retrieve()."""
     content: str
     session_file: str = ""
     turn_idx: int = -1
@@ -52,13 +52,13 @@ class MemoryChunk:
 
 @dataclass
 class _EntryRecord:
-    """Token budget 관리용 내부 레코드."""
+    """Internal record for token budget tracking."""
     entry_id: str
     session_file: str
     turn_idx: int
     token_count: int
     insert_order: int
-    content: str = ""        # snapshot/error analysis용 (첫 500자만 저장)
+    content: str = ""        # for snapshot/error analysis (first 500 chars only)
 
 
 class BaseMemorySystem(ABC):
@@ -72,7 +72,7 @@ class BaseMemorySystem(ABC):
         self._written_turns: set[tuple[str, int]] = set()
 
     # ─────────────────────────────────────
-    # 추상 메서드 (각 시스템 구현 필요)
+    # Abstract methods (implemented by each system)
     # ─────────────────────────────────────
 
     @abstractmethod
@@ -85,7 +85,7 @@ class BaseMemorySystem(ABC):
         user_content: str,
         agent_content: str,
     ) -> str | None:
-        """단일 turn을 실제 memory system에 저장. entry_id 반환, 저장 안 했으면 None."""
+        """Store one turn in the backend. Returns entry_id, or None if not stored."""
         pass
 
     @abstractmethod
@@ -101,11 +101,11 @@ class BaseMemorySystem(ABC):
         pass
 
     # ─────────────────────────────────────
-    # 공통 구현 (override 가능)
+    # Shared implementation (overridable)
     # ─────────────────────────────────────
 
     def write(self, session: dict) -> list[tuple[str, int]]:
-        """Turn 단위 저장 (storage_unit='turn' 기본 경로)."""
+        """Per-turn storage (default path when storage_unit='turn')."""
         dialogue = session.get('dialogue', [])
         session_file = session.get('_filename', 'unknown')
         session_idx = session.get('session_idx', -1)
@@ -138,16 +138,16 @@ class BaseMemorySystem(ABC):
 
     def write_session(self, session: dict) -> list[tuple[str, int]]:
         """
-        Session 단위 저장 (storage_unit='session' 경로).
+        Per-session storage (path when storage_unit='session').
 
-        기본 구현은 turn 단위 write()에 위임.
-        Mem0처럼 전체 conversation context를 한 번에 처리하는 시스템은
-        이 메서드를 override하여 memory.add(all_messages)를 한 번만 호출.
+        Default delegates to per-turn write().
+        Systems that handle full conversation context at once (e.g. Mem0)
+        override this to call memory.add(all_messages) once.
 
-        반환값 규칙:
-          - turn 단위: [(session_file, turn_idx), ...]
-          - session 단위 override: [(session_file, -1)] 을 sentinel로 사용
-            (turn_idx=-1 은 세션 전체를 하나의 단위로 저장했음을 의미)
+        Return value rules:
+          - per-turn: [(session_file, turn_idx), ...]
+          - session override: use [(session_file, -1)] as sentinel
+            (turn_idx=-1 means the whole session was stored as one unit)
         """
         return self.write(session)
 
@@ -157,32 +157,30 @@ class BaseMemorySystem(ABC):
         written_keys: list[tuple[str, int]],
     ) -> str:
         """
-        Write check에 사용할 텍스트를 반환.
+        Return text for write checks.
 
-        기본 구현 (heuristic 등 raw text 저장 시스템):
-            dialogue에서 written turn의 원본 텍스트를 직접 추출.
-            DB 조회 없음 — eviction/변환 노이즈 없는 순수 입력 텍스트.
+        Default (heuristic and other raw-text systems):
+            Extract original text of written turns from dialogue.
+            No DB lookup — pure input text without eviction/transform noise.
 
-        Mem0 등 fact 추출 시스템은 이 메서드를 override하여
-        실제로 메모리에 저장된 fact 텍스트를 반환해야 함.
-        그래야 "raw input에 fact가 있었는데 Mem0가 저장 안 한" 케이스와
-        "Mem0가 fact를 추출해서 저장한" 케이스를 올바르게 구분 가능.
+        Fact-extraction systems (e.g. Mem0) must override this to return
+        facts actually stored in memory, so we can distinguish
+        "fact in raw input but not stored" vs "fact extracted and stored".
 
         Args:
-            session: 현재 세션 dict (dialogue 포함)
-            written_keys: write() 또는 write_session()이 반환한
-                          [(session_file, turn_idx), ...] 목록.
-                          session 단위 sentinel (turn_idx=-1)도 처리.
+            session: current session dict (includes dialogue)
+            written_keys: [(session_file, turn_idx), ...] from write() or write_session().
+                          Also handles session sentinel (turn_idx=-1).
 
         Returns:
-            Write check용 텍스트 (빈 문자열이면 write_score=0)
+            Text for write check (empty string → write_score=0)
         """
         if not written_keys:
             return ""
 
         dialogue = session.get('dialogue', [])
 
-        # sentinel (-1) = 세션 전체가 하나의 단위로 저장됨 → 전체 dialogue 반환
+        # sentinel (-1) = whole session stored as one unit → return full dialogue
         if any(ti == -1 for (_, ti) in written_keys):
             parts = []
             for turn_idx, user_content, agent_content in self.extract_turns(dialogue):
@@ -191,7 +189,7 @@ class BaseMemorySystem(ABC):
                     parts.append(f"Agent: {agent_content}")
             return "\n\n".join(parts)
 
-        # 일반 turn 단위: written turn만 추출
+        # per-turn: extract only written turns
         written_set = {ti for (_, ti) in written_keys}
         parts = []
         for turn_idx, user_content, agent_content in self.extract_turns(dialogue):
@@ -202,7 +200,7 @@ class BaseMemorySystem(ABC):
         return "\n\n".join(parts)
 
     def post_session(self) -> dict:
-        """세션 종료 후 budget 적용. 초과분 oldest-first 삭제."""
+        """Apply budget after session; evict excess oldest-first."""
         deleted_for_token_limit = self._enforce_token_budget()
         deleted_for_entry_limit = self._enforce_entry_budget()
         return {
@@ -221,7 +219,7 @@ class BaseMemorySystem(ABC):
         return self._written_turns
 
     # ─────────────────────────────────────
-    # Token Budget 내부 관리
+    # Token budget internals
     # ─────────────────────────────────────
 
     def _register_entry(
@@ -246,8 +244,8 @@ class BaseMemorySystem(ABC):
 
     def dump_memories(self) -> list[dict]:
         """
-        현재 bank에 존재하는 모든 entry 목록 반환 (snapshot/error analysis용).
-        Mem0 등은 override하여 실제 저장된 fact 텍스트를 반환.
+        Return all entries currently in the bank (snapshot/error analysis).
+        Mem0 etc. override to return actually stored fact text.
         """
         return [
             {
@@ -371,7 +369,7 @@ class BaseMemorySystem(ABC):
         pass
 
     # ─────────────────────────────────────
-    # 공통 유틸
+    # Shared utilities
     # ─────────────────────────────────────
 
     @staticmethod

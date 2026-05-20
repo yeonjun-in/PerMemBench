@@ -1,12 +1,3 @@
-"""
-run_utils.py
-
-6_run_*.py 스크립트들이 공유하는 공통 유틸리티.
-- session loading / normalization
-- snapshot saving
-- OracleFilter 체크
-"""
-
 import json
 from datetime import datetime
 from pathlib import Path
@@ -33,7 +24,7 @@ def load_sessions_ordered(user_dir: Path) -> list[dict]:
 
 
 def normalize_session(session: dict) -> dict:
-    """base.py write()가 읽는 필드명으로 매핑."""
+    """Map field names expected by base.py write()."""
     if 'domain_name' not in session:
         session['domain_name'] = session.get('domain', '')
     if 'session_idx' not in session:
@@ -42,7 +33,7 @@ def normalize_session(session: dict) -> dict:
 
 
 def should_skip_session(session: dict, oracle: bool) -> bool:
-    """oracle=True 일 때 memory_required=False 세션 skip."""
+    """When oracle=True, skip sessions with memory_required=False."""
     if oracle and not session.get('memory_required', True):
         return True
     return False
@@ -67,10 +58,7 @@ def save_snapshot(
     write_evidence: str = "",
     gt_memory: list[dict] | None = None,
 ) -> None:
-    """
-    세션 처리 후 snapshot 저장.
-    평가 점수 없이 메모리 상태 + gt_memory 정보만 포함.
-    """
+    
     out_dir = snapshot_dir / system_label / uuid
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"session_{session_id:04d}.json"
@@ -92,7 +80,7 @@ def save_snapshot(
         "n_entries_after":        system.n_entries,
         "write_evidence":         write_evidence,
         "memories":               system.dump_memories(),
-        # gt_memory: 평가 시점에 필요한 정보 보존
+        # gt_memory: preserve fields needed at evaluation time
         "gt_memory": [
             {
                 "gt_idx":           i,
@@ -137,7 +125,7 @@ def save_final_memory(
 
 
 # ─────────────────────────────────────────────────
-# 공통 실행 루프
+# Shared execution loop
 # ─────────────────────────────────────────────────
 
 def run_memory_pipeline(
@@ -155,16 +143,7 @@ def run_memory_pipeline(
     save_checkpoint_dir: Path | None = None,
     load_checkpoint_dir: Path | None = None,
 ) -> None:
-    """
-    공통 실행 루프.
-    세션을 순서대로 처리하며 메모리 저장 + snapshot 저장.
-    평가(write/read/QA score)는 하지 않음.
-
-    save_checkpoint_dir : 모든 세션 처리 후 메모리 상태를 체크포인트로 저장.
-                          {save_checkpoint_dir}/{uuid}/ 에 budget_state.json + backend_state.json.
-    load_checkpoint_dir : 세션 처리 시작 전 체크포인트를 로드하여 해당 시점 메모리부터 시작.
-                          {load_checkpoint_dir}/{uuid}/ 에서 읽음.
-    """
+    
     if uuid_filter:
         uuids = [uuid_filter]
     else:
@@ -196,10 +175,10 @@ def run_memory_pipeline(
             print("  [SKIP] No sessions found.")
             continue
 
-        # UUID 기반으로 system reset
+        # Reset system for this UUID
         system.reset(user_id=uuid)
 
-        # 체크포인트 로드 (reset 이후 — backend(Memory 객체)는 재생성, user_id만 복원)
+        # Load checkpoint after reset (backend recreated; user_id restored)
         if load_checkpoint_dir is not None:
             ckpt_path = load_checkpoint_dir / uuid
             if ckpt_path.exists() and (ckpt_path / "budget_state.json").exists():
@@ -224,10 +203,10 @@ def run_memory_pipeline(
             gt_memory       = session.get('gt_memory', [])
             session_file    = session.get('_filename', 'unknown')
 
-            # oracle: memory_required=False 세션 skip
+            # oracle: skip memory_required=False sessions
             if should_skip_session(session, oracle):
                 print(f"  [{s_idx+1}/{n_sessions}] {session_file} | [ORACLE SKIP]")
-                # snapshot은 빈 상태로 저장 (일관성 유지)
+                # save empty snapshot for consistency
                 if snapshot_dir:
                     save_snapshot(
                         snapshot_dir=snapshot_dir,
@@ -288,7 +267,7 @@ def run_memory_pipeline(
                   f" | total_tokens={system.total_tokens}"
                   f" | entries={system.n_entries}")
 
-            # ── Step 4: Snapshot 저장 ──────────────────────────────
+            # ── Step 4: Save snapshot ──────────────────────────────
             if snapshot_dir is not None:
                 try:
                     save_snapshot(
@@ -326,7 +305,7 @@ def run_memory_pipeline(
             except Exception as e:
                 print(f"  [WARN] final memory dump failed: {e}")
 
-        # ── Checkpoint 저장 ────────────────────────────────────────
+        # ── Checkpoint save ────────────────────────────────────────
         if save_checkpoint_dir is not None:
             ckpt_path = save_checkpoint_dir / uuid
             try:

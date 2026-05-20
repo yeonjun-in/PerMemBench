@@ -1,28 +1,3 @@
-"""
-2_0_generate_life_skeleton.py
-
-For each persona's memory-required domains, generates a Life Skeleton:
-  - Project sequence (sequential projects over 1-2 years)
-  - Event sequence within each project
-  - GT Memory per event:
-      - user_profile: stable facts about the user (persists across projects)
-      - ongoing_state: current project context (disappears when project ends)
-  - Probing question + answer for each GT memory item
-
-Usage:
-  # single file
-  python 2_0_generate_life_skeleton.py --input_file final_persona_metadata/0a0dcec0.json --output_dir ./life_skeletons
-
-  # full directory
-  python 2_0_generate_life_skeleton.py --input_dir ./final_persona_metadata --output_dir ./life_skeletons
-
-  # with specific model
-  python 2_0_generate_life_skeleton.py --input_dir ./final_persona_metadata --output_dir ./life_skeletons --provider openai --model gpt-4o
-
-  # sample up to 3 domains per user (reproducible)
-  python 2_0_generate_life_skeleton.py --input_dir ./final_persona_metadata --output_dir ./life_skeletons --max_domains_per_user 3 --domain_sample_seed 42
-"""
-
 import json
 import os
 import argparse
@@ -182,10 +157,6 @@ def get_event_range(frequency: str) -> tuple[int, int]:
 
 
 def build_already_covered_section(domain_name: str, already_generated: list[dict]) -> str:
-    """
-    Builds the 'Already covered' prompt section from previously generated domain skeletons.
-    Returns an empty string if nothing has been generated yet.
-    """
     if not already_generated:
         return ""
 
@@ -217,14 +188,7 @@ def sample_domains(
     max_domains: int | None,
     rng: random.Random,
 ) -> list[dict]:
-    """
-    Randomly sample up to max_domains from memory_domains WITHOUT replacement,
-    using frequency-based weights (high=3, medium=2, low=1) normalized to probabilities.
 
-    If max_domains is None or >= len(memory_domains), returns all domains as-is.
-    Final result is sorted back to the original order so the already_covered_section
-    logic remains deterministic.
-    """
     if max_domains is None or max_domains >= len(memory_domains):
         return memory_domains
 
@@ -293,7 +257,7 @@ def process_persona_file(
 ) -> dict:
     with open(filepath, "r", encoding="utf-8") as f:
         data = json.load(f)
-    domain_list = open('domain_list_v3.txt', 'r', encoding='utf-8').read()
+    domain_list = open('domain_list_final.txt', 'r', encoding='utf-8').read()
     domain_list = [a.split('. ')[1] for a in domain_list.split('\n')]
     uuid = data["uuid"]
     output_path = os.path.join(output_dir, f"{uuid}.json")
@@ -359,7 +323,7 @@ def process_persona_file(
 
 def main():
     parser = argparse.ArgumentParser(description="Generate Life Skeletons for persona domains")
-    parser.add_argument("--input_file", type=str, default='final_persona_metadata_v3/0a0dcec0230a4083880dfdee4b46759e.json',
+    parser.add_argument("--input_file", type=str, default='final_persona_metadata/0a0dcec0230a4083880dfdee4b46759e.json',
                         help="Path to a single persona JSON file")
     parser.add_argument("--input_dir", type=str, default=None,
                         help="Directory containing persona JSON files")

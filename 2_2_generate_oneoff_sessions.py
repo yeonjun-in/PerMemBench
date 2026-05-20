@@ -1,51 +1,3 @@
-"""
-2_0b_generate_oneoff_sessions_v2.py
-
-Stage 2b: Generate one-off session events for memory_required=False domains.
-
-For each persona's memory_required=False domains, generates a set of independent,
-self-contained events — each representing a single AI agent interaction with no
-continuity requirements across sessions.
-
-Unlike memory_required=True domains (which have longitudinal project structures),
-these events are:
-  - Independent of each other (no cross-session continuity)
-  - Self-contained within a single conversation
-  - Realistic one-time requests grounded in the persona's life
-
-Number of events per domain is derived from the actual timeline duration estimated
-from the memory_required=True domain skeletons, using empirically grounded
-interaction frequencies:
-
-  high   -> once every 4 weeks
-  medium -> once every 8 weeks
-  low    -> once every 12 weeks
-
-Timeline duration is estimated from the skeleton's project structure (same logic
-as 2_1_integrate_timeline_v2.py) so that 2_0b can run before 2_1 without
-needing the final integrated timeline.
-
-Pipeline position:
-  2_0  -> life_skeletons/{uuid}.json       (memory_required=True domains)
-  2_0b -> injects oneoff_sessions[] into life_skeletons/{uuid}.json  <- this script
-  2_1  -> integrates both into unified timeline
-
-Iteration target: skeleton files in --skeleton_dir (only processes UUIDs that 2_0 completed).
-Persona metadata is looked up from --persona_dir for domain info (memory_required, frequency).
-
-Usage:
-  # single skeleton file
-  python 2_0b_generate_oneoff_sessions_v2.py \\
-      --skeleton_file ./life_skeletons/0a0dcec0.json \\
-      --persona_dir ./final_persona_metadata_v3
-
-  # full skeleton directory
-  python 2_0b_generate_oneoff_sessions_v2.py \\
-      --skeleton_dir ./life_skeletons \\
-      --persona_dir ./final_persona_metadata_v3 \\
-      --provider openai --model gpt-4o-mini
-"""
-
 import json
 import os
 import argparse
@@ -164,11 +116,7 @@ def format_persona(persona_dict: dict) -> str:
 
 
 def estimate_total_months(skeleton_data: dict) -> int:
-    """
-    Estimate total timeline duration in months from the memory_required=True
-    domain skeletons. Uses the same heuristic as 2_1_integrate_timeline_v2.py:
-    sum of (project count × 3 months per project), clamped to [12, 24].
-    """
+
     domain_skeletons = skeleton_data.get("domain_skeletons", [])
     total = 0
     for ds in domain_skeletons:
@@ -177,12 +125,7 @@ def estimate_total_months(skeleton_data: dict) -> int:
 
 
 def get_session_count(frequency: str, total_months: int) -> int:
-    """
-    Derive number of one-off sessions from timeline duration and interaction frequency.
 
-    Formula: n = total_weeks / weeks_per_session
-    where total_weeks = total_months × 4.33
-    """
     total_weeks = total_months * WEEKS_PER_MONTH
     interval_weeks = WEEKS_PER_SESSION.get(frequency, DEFAULT_WEEKS_PER_SESSION)
     return max(1, math.floor(total_weeks / interval_weeks))
@@ -194,10 +137,7 @@ def generate_oneoff_events(
     domain: dict,
     total_months: int,
 ) -> dict:
-    """
-    Generate one-off events for a single memory_required=False domain.
-    Returns the parsed JSON with domain_name and events list.
-    """
+
     persona_text = format_persona(persona)
     frequency = domain.get("frequency", "medium")
     interval_weeks = WEEKS_PER_SESSION.get(frequency, DEFAULT_WEEKS_PER_SESSION)
@@ -232,13 +172,7 @@ def process_skeleton(
     llm: "UnifiedLLM",
     overwrite: bool = False,
 ) -> dict:
-    """
-    For one skeleton file:
-      1. Load skeleton -> estimate total_months from project structure
-      2. Look up persona metadata -> extract memory_required=False domains
-      3. Generate one-off events per domain (count derived from total_months)
-      4. Inject into the skeleton file as oneoff_sessions[]
-    """
+
     # Load existing skeleton
     with open(skeleton_path, encoding="utf-8") as f:
         skeleton_data = json.load(f)
@@ -324,10 +258,10 @@ def main():
     input_group = parser.add_mutually_exclusive_group(required=False)
     input_group.add_argument("--skeleton_file", type=str, default=None,
                              help="Path to a single life skeleton JSON file (2_0 output)")
-    input_group.add_argument("--skeleton_dir", type=str, default='life_skeletons_v5_clean',
+    input_group.add_argument("--skeleton_dir", type=str, default='life_skeletons',
                              help="Directory containing life skeleton JSON files (2_0 output)")
 
-    parser.add_argument("--persona_dir", type=str, default='final_persona_metadata_v3',
+    parser.add_argument("--persona_dir", type=str, default='final_persona_metadata',
                         help="Directory containing persona metadata JSON files.")
     parser.add_argument("--limit", type=int, default=None,
                         help="Limit the number of skeleton files to process")

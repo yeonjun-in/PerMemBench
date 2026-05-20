@@ -10,7 +10,7 @@ import argparse
 
 # Login using e.g. `huggingface-cli login` to access this dataset
 ds = load_dataset("nvidia/Nemotron-Personas-USA")
-domain_list = open('domain_list_v3.txt', 'r', encoding='utf-8').read()
+domain_list = open('domain_list_final.txt', 'r', encoding='utf-8').read()
 n_domains = len(domain_list.split('\n'))
 
 prompt_format_all_domain = \
@@ -71,15 +71,15 @@ Return a JSON object in the following format:
 '''
 
 # %%
-# 1000개 랜덤 샘플링
+# random sample of personas
 random.seed(1995)
 total_size = len(ds['train'])
 sample_indices = random.sample(range(total_size), 2000)
-# 저장 폴더 생성
-output_dir = f'./persona_metadata_domains_v3'
+# create output directory
+output_dir = f'./persona_metadata_domains'
 os.makedirs(output_dir, exist_ok=True)
 
-# LLM 초기화
+# initialize LLM
 llm = UnifiedLLM('claude', 'claude-haiku-4-5')
 
 results = []
@@ -89,7 +89,7 @@ for idx in tqdm(sample_indices, desc="Processing personas"):
     sample = ds['train'][idx]
     uuid = sample['uuid']
     
-    # persona 텍스트 생성
+    # build persona text
     persona = ''
     for key, value in sample.items():
         if key == 'uuid':
@@ -112,7 +112,7 @@ for idx in tqdm(sample_indices, desc="Processing personas"):
         }
         results.append(result)
         
-        # 개별 파일로 저장
+        # save per-uuid file
         with open(os.path.join(output_dir, f'{uuid}.json'), 'w', encoding='utf-8') as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
             
@@ -123,7 +123,7 @@ for idx in tqdm(sample_indices, desc="Processing personas"):
 print(f"\nCompleted: {len(results)} / 1000")
 print(f"Errors: {len(errors)}")
 
-# 전체 결과를 하나의 파일로도 저장
+# also save aggregated results file
 with open(os.path.join(output_dir, '_all_results.json'), 'w', encoding='utf-8') as f:
     json.dump(results, f, ensure_ascii=False, indent=2)
 

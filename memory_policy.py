@@ -1,16 +1,3 @@
-"""
-memory_policy.py
-
-Memory Policy 구현.
-
-- UniversalHeuristicPolicy: 모든 turn 무조건 저장 (raw text), oldest-first 삭제, consolidation 없음
-- UniversalLLMPolicy: LLM이 저장 여부 판단, raw or key_fact (hyperparameter),
-                      importance 기반 삭제, consolidation 있음
-                      ※ LLM에게 domain/persona 정보 제공 안 함 — 대화 내용만 제공
-- OraclePolicy: memory_required=True인 domain만 저장 (메타데이터 oracle 사용)
-                저장 방식 및 삭제/consolidation은 UniversalLLMPolicy와 동일
-"""
-
 import json
 import time
 import uuid
@@ -127,7 +114,6 @@ def build_turn_raw_text(user_content: str, agent_content: str) -> str:
 # ========================
 
 class BaseMemoryPolicy(ABC):
-    """모든 policy의 base class."""
 
     def __init__(self, deletion_strategy: str = 'oldest_first'):
         self.deletion_strategy = deletion_strategy
@@ -138,25 +124,16 @@ class BaseMemoryPolicy(ABC):
         session: dict,
         memory_bank: MemoryBank,
     ) -> list[MemoryEntry]:
-        """
-        세션 전체를 처리해 memory_bank에 저장.
-        반환: 새로 추가된 MemoryEntry 목록
-        """
+        
         pass
 
     def post_session(self, memory_bank: MemoryBank) -> dict:
-        """
-        세션 종료 후 후처리 (consolidation, token limit 적용).
-        반환: 처리 결과 통계
-        """
+        
         deleted = memory_bank.enforce_token_limit(strategy=self.deletion_strategy)
         return {"deleted_for_token_limit": deleted}
 
     def _extract_dialogue_turns(self, dialogue: list[dict]) -> list[tuple[int, str, str]]:
-        """
-        dialogue → [(turn_idx, user_content, agent_content), ...]
-        user-agent pair를 하나의 turn으로 묶음 (turn_idx는 0-based pair index)
-        """
+        
         turns = []
         pair_idx = 0
         i = 0
@@ -181,12 +158,7 @@ class BaseMemoryPolicy(ABC):
 # ========================
 
 class UniversalHeuristicPolicy(BaseMemoryPolicy):
-    """
-    모든 turn을 무조건 raw text로 저장.
-    삭제: oldest-first
-    Consolidation: 없음
-    Importance: 모두 0.5 (균일)
-    """
+
 
     def __init__(self):
         super().__init__(deletion_strategy='oldest_first')
@@ -198,7 +170,7 @@ class UniversalHeuristicPolicy(BaseMemoryPolicy):
     ) -> list[MemoryEntry]:
         dialogue = session.get('dialogue', [])
         session_file = session.get('_filename', 'unknown')
-        session_idx = session.get('session_idx', -1)  # cold_start은 -1
+        session_idx = session.get('session_idx', -1)  # -1 for cold_start
         domain_name = session.get('domain_name', '')
 
         turns = self._extract_dialogue_turns(dialogue)
@@ -207,7 +179,7 @@ class UniversalHeuristicPolicy(BaseMemoryPolicy):
             if not user_content and not agent_content:
                 continue
             content = build_turn_raw_text(user_content, agent_content)
-            # 키워드: 간단히 user 발화에서 상위 단어 추출 (heuristic)
+            # keywords: top words from user utterance (heuristic)
             keywords = _simple_keywords(user_content, n=5)
             entry = MemoryEntry(
                 entry_id=str(uuid.uuid4()),
@@ -226,7 +198,7 @@ class UniversalHeuristicPolicy(BaseMemoryPolicy):
         return entries
 
     def post_session(self, memory_bank: MemoryBank) -> dict:
-        # consolidation 없음, token limit만 적용
+        # no consolidation; apply token limit only
         deleted = memory_bank.enforce_token_limit(strategy='oldest_first')
         return {"deleted_for_token_limit": deleted, "consolidation": False}
 
@@ -236,18 +208,13 @@ class UniversalHeuristicPolicy(BaseMemoryPolicy):
 # ========================
 
 class UniversalLLMPolicy(BaseMemoryPolicy):
-    """
-    LLM이 저장 여부 판단 (대화 내용만 보고 판단 — domain/persona 정보 없음).
-    content 형식: 'raw' or 'key_fact' (hyperparameter)
-    삭제: importance 기반
-    Consolidation: 매 세션 종료 후
-    """
+
 
     def __init__(
         self,
         llm,                          # UnifiedLLM instance
         content_mode: str = 'key_fact',  # 'raw' or 'key_fact'
-        consolidation_top_k: int = 5,    # consolidation 시 retrieve top_k
+        consolidation_top_k: int = 5,    # retrieve top_k during consolidation
     ):
         super().__init__(deletion_strategy='importance_based')
         self.llm = llm
@@ -320,12 +287,12 @@ class UniversalLLMPolicy(BaseMemoryPolicy):
             if not user_content:
                 continue
 
-            # Step 1: 저장 여부 판단
+            # Step 1: decide whether to store
             should_store = self._decide_store(user_content, agent_content)
             if not should_store:
                 continue
 
-            # Step 2: content 생성
+            # Step 2: generate content
             if self.content_mode == 'key_fact':
                 content, keywords = self._extract_key_fact(user_content, agent_content)
             else:  # raw
@@ -355,7 +322,6 @@ class UniversalLLMPolicy(BaseMemoryPolicy):
         return entries
 
     def post_session(self, memory_bank: MemoryBank) -> dict:
-        """세션 종료 후: consolidation → token limit 적용"""
         consolidated = self._run_consolidation(memory_bank)
         deleted = memory_bank.enforce_token_limit(strategy='importance_based')
         return {
@@ -364,24 +330,21 @@ class UniversalLLMPolicy(BaseMemoryPolicy):
         }
 
     def _run_consolidation(self, memory_bank: MemoryBank) -> list[dict]:
-        """
-        최근 추가된 entry들에 대해 관련 메모리를 retrieve해서 consolidation 실행.
-        """
         if memory_bank.size < 2:
             return []
 
         actions = []
         processed_ids = set()
 
-        # 최근 5개 entry에 대해 관련 메모리 확인
+        # check related memories for 5 most recent entries
         recent = memory_bank.entries[-5:]
         for entry in recent:
             if entry.entry_id in processed_ids:
                 continue
 
-            # 관련 메모리 retrieve
+            # retrieve related memories
             related = memory_bank.retrieve(entry.content, top_k=self.consolidation_top_k)
-            # 자기 자신 제외, 이미 처리된 것 제외
+            # exclude self and already processed
             related = [
                 e for e in related
                 if e.entry_id != entry.entry_id and e.entry_id not in processed_ids
@@ -389,7 +352,7 @@ class UniversalLLMPolicy(BaseMemoryPolicy):
             if not related:
                 continue
 
-            # 상위 관련도 1개와 consolidation 시도
+            # try consolidation with top-1 related entry
             candidate = related[0]
             entries_block = (
                 f"Entry 1 (ID: {entry.entry_id}):\n{entry.content}\n\n"
@@ -438,7 +401,7 @@ class UniversalLLMPolicy(BaseMemoryPolicy):
 # ========================
 
 def _simple_keywords(text: str, n: int = 5) -> list[str]:
-    """간단한 heuristic 키워드 추출 (stopword 제거 + 빈도순)"""
+    """Simple heuristic keyword extraction (drop stopwords, sort by frequency)"""
     STOPWORDS = {
         'i', 'me', 'my', 'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been',
         'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should',
@@ -459,17 +422,7 @@ def _simple_keywords(text: str, n: int = 5) -> list[str]:
 # ========================
 
 class OraclePolicy(UniversalLLMPolicy):
-    """
-    Personalized Oracle Policy.
 
-    memory_required=True인 domain의 세션만 저장.
-    memory_required=False이면 해당 세션 전체를 스킵.
-
-    저장 방식, importance scoring, 삭제(importance 기반), consolidation은
-    UniversalLLMPolicy와 완전히 동일 — 유일한 차이는 domain 필터링 여부.
-
-    ※ session의 'memory_required' 필드를 그대로 사용 (메타데이터 oracle).
-    """
 
     def __init__(self, llm, content_mode: str = 'key_fact', consolidation_top_k: int = 5):
         super().__init__(llm=llm, content_mode=content_mode, consolidation_top_k=consolidation_top_k)
@@ -485,22 +438,7 @@ class OraclePolicy(UniversalLLMPolicy):
 # ========================
 
 class OracleHeuristicPolicy(UniversalHeuristicPolicy):
-    """
-    Oracle 필터 + Heuristic 저장 방식.
 
-    memory_required=True인 domain의 세션만 저장하되,
-    저장 방식은 UniversalHeuristicPolicy와 동일:
-    - 모든 turn 무조건 raw text 저장
-    - importance=0.5 균일
-    - oldest-first 삭제
-    - consolidation 없음
-
-    비교 목적:
-      OracleHeuristicPolicy vs OraclePolicy(LLM)
-        → oracle 필터 유지하면서 저장 방식(heuristic vs LLM)의 효과만 분리
-      OracleHeuristicPolicy vs UniversalHeuristicPolicy
-        → 저장 방식 고정하고 oracle 필터의 효과만 분리
-    """
 
     def __init__(self):
         super().__init__()

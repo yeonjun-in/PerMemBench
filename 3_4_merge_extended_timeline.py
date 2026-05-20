@@ -8,12 +8,7 @@ from typing import Any
 
 
 def _merge_domain_skeletons(phase1: list[dict[str, Any]], phase2: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """
-    Merge domain skeleton blocks by domain_name.
-
-    - If the same domain exists in both phases, projects are concatenated.
-    - Event/project IDs are kept as-is (phase2 was generated to continue IDs).
-    """
+    
     merged_by_domain: dict[str, dict[str, Any]] = {}
     domain_order: list[str] = []
 
@@ -53,12 +48,7 @@ def _merge_domain_skeletons(phase1: list[dict[str, Any]], phase2: list[dict[str,
 
 
 def _merge_oneoff_sessions(phase1: list[dict[str, Any]], phase2: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """
-    Merge one-off domain blocks by domain_name.
-
-    - If domain_name duplicates, events are concatenated.
-    - Other metadata fields are merged conservatively.
-    """
+    
     merged_by_domain: dict[str, dict[str, Any]] = {}
     domain_order: list[str] = []
 
