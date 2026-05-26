@@ -110,27 +110,6 @@ def build_system(
             embedding_model=embedding_model,
         )
 
-    elif system_name == 'rmm':
-        system = RMMSystem(
-            max_tokens=max_tokens,
-            llm_provider=rmm_llm_provider,
-            llm_model=rmm_llm_model,
-            llm_base_url=rmm_llm_base_url,
-            embedding_provider=rmm_embedding_provider,
-            embedding_model=rmm_embedding_model,
-            update_top_k=rmm_update_top_k,
-        )
-
-    elif system_name == 'memory_r1':
-        system = MemoryR1System(
-            max_tokens=max_tokens,
-            llm_provider=r1_llm_provider,
-            llm_model=r1_llm_model,
-            llm_base_url=r1_llm_base_url,
-            embedding_provider=r1_embedding_provider,
-            embedding_model=r1_embedding_model,
-            manager_top_k=r1_manager_top_k,
-        )
 
     elif system_name == 'mem0':
         resolved_config = dict(mem0_config or {})
@@ -182,51 +161,11 @@ def build_system(
             config=resolved_config if resolved_config else None,
         )
 
-    elif system_name == 'memobase':
-        system = MemobaseSystem(
-            max_tokens=max_tokens,
-            project_url=memobase_project_url,
-            api_key=memobase_api_key,
-        )
-
-    elif system_name == 'supermemory':
-        system = SupermemorySystem(
-            max_tokens=max_tokens,
-            api_key=supermemory_api_key,
-        )
-
-    elif system_name == 'memos':
-        system = MemOSSystem(
-            max_tokens=max_tokens,
-            config_path=memos_config_path,
-        )
-
-    elif system_name == 'memoryos':
-        system = MemoryOSSystem(
-            max_tokens=max_tokens,
-            openai_api_key=memoryos_openai_api_key,
-            openai_base_url=memoryos_openai_base_url,
-            llm_model=memoryos_llm_model,
-            embedding_model_name=memoryos_embedding_model,
-            data_storage_root=memoryos_data_storage_root,
-            mid_term_capacity=memoryos_mid_term_capacity,
-            mid_term_heat_threshold=memoryos_mid_term_heat_threshold,
-            mid_term_similarity_threshold=memoryos_mid_term_similarity_threshold,
-            short_term_capacity=memoryos_short_term_capacity,
-        )
-
-    elif system_name == 'amem':
-        system = AmemSystem(
-            max_tokens=max_tokens,
-            embedding_model=amem_embedding_model,
-            llm_backend=amem_llm_backend,
-            llm_model=amem_llm_model,
-        )
 
     else:
         raise ValueError(
             f"Unknown system: '{system_name}'. "
-            "Choose from: heuristic, mem0, memory_r1, memobase, supermemory, memos, memoryos, amem"
+            "Choose from: mem0"
         )
 
     system.max_entries = max_entries
@@ -241,13 +180,6 @@ __all__ = [
     'MemoryChunk',
     'HeuristicSystem',
     'Mem0System',
-    'MemoryR1System',
-    'RMMSystem',
-    'MemobaseSystem',
-    'SupermemorySystem',
-    'MemOSSystem',
-    'MemoryOSSystem',
-    'AmemSystem',
     'OracleFilter',
     'build_system',
 ]
