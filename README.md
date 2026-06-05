@@ -1,32 +1,83 @@
-# Personalize-then-Store / PerMemBench
+# Personalize-then-Store: Benchmarking and Learning Personalized Memory for Long-horizon Agents
 
-This repository contains the benchmark construction and evaluation pipeline from
-**"Personalize-then-Store: Benchmarking and Learning Personalized Memory for Long-horizon Agents"**
-([arXiv:2605.25535](https://arxiv.org/abs/2605.25535)).
+[![arXiv](https://img.shields.io/badge/arXiv-2605.25535-b31b1b.svg)](https://arxiv.org/abs/2605.25535)
 
-The project builds long-horizon personalized dialogue trajectories and evaluates memory systems under different storage policies, including session-level gating.
+> **Yeonjun In, Wonjoong Kim, Sangwu Park, Kanghoon Yoon, Chanyoung Park**
+>
+> KAIST
 
-## What this repo includes
+## Overview
 
-- **Benchmark construction pipeline**:
-  - Persona metadata generation and filtering (`1_*`)
-  - Pre/post-shift life skeleton and timeline generation (`2_*`, `3_*`)
-  - Dialogue generation (`4_dialogue_gen.py`)
-- **Memory-system runs**:
-  - Base Mem0 runs (`5_run_mem0.py`, `sh/run_mem0.sh`)
-  - Gating baselines (`6_gating_*.py`)
-  - Snapshot augmentation for budgeted post-hoc simulation (`6_snapshot_augmentation.py`)
-- **Evaluation and analysis**:
-  - Memory retention evaluation (`7_memory_retention_eval.py`, `sh/run_long.sh`)
-  - Notebook-based analysis (`7_MRR_display.ipynb`)
+Existing LLM-based memory systems apply **universal, static policies** that overlook a fundamental reality: the contexts that are worth storing in memory are different across users. This misalignment wastes limited memory budget on transient interactions while failing to preserve critical context for long-horizon tasks.
 
-## Quick start
+As illustrated below, users exhibit **heterogeneous agent use patterns**. For Alice, *Recipe Advice* is a long-horizon project while *Travel Plan* is transient — and exactly the reverse holds for Bob. A universal memory system evicts essential context for one user while unnecessarily storing another's. An ideal personalized memory policy infers each user's worth-storing sessions and selectively manages memory accordingly.
 
-### 1) Environment
 
-Use Python 3.10+ (recommended) and install dependencies used by your run.
+![Figure 1: Motivating examples of personalized memory system](assets/figure1.png)
 
-At minimum, you will typically need packages such as:
+**(a)** Users exhibit distinct agent use patterns. **(b)** One-size-fits-all memory systems fail to personalize these user-specific needs, leading to the eviction of essential contexts. **(c)** An ideal personalized memory policy selectively preserves essential contexts tailored to each user's use pattern.
+
+## PerMemBench
+
+We introduce **PerMemBench**, the first benchmark for evaluating personalized memory systems, featuring **multi-year, multi-domain interaction histories** across diverse user personas. The benchmark is constructed through a fully automated three-stage pipeline:
+
+1. **User-specific agent use profiling** — Generate diverse user personas and profile their domain-level usage patterns (long-horizon vs. transient).
+2. **Life skeleton and timeline construction** — Build a structured long-horizon trajectory per user, covering events before and after behavioral pattern shifts.
+3. **Dialogue synthesis** — Generate realistic session-level dialogues via an LLM-based user simulator grounded in the life skeleton.
+
+
+![Figure 2: Overview of the construction pipeline for PerMemBench](assets/figure2.png)
+
+The resulting dataset covers **20 users × multi-year sessions × diverse domains**. Since the pipeline is fully automated, it can be readily scaled to larger and more diverse cohorts.
+
+## Session-level Storage Gating
+
+We propose **session-level storage gating**, a lightweight personalization framework that:
+- After each session, predicts whether the session is **long-horizon** (worth storing) or **transient** (skip memory operations).
+- Requires **no modification** to the underlying memory system.
+- Concentrates the memory budget on sessions that genuinely benefit from long-term accumulation.
+
+We introduce three gating baselines of increasing contextual richness:
+
+| Method | Description |
+|---|---|
+| **Greedy** | Predicts gating from the current session only, no prior context. |
+| **Context-aware** | Uses a sliding window of recent session summaries as context. |
+| **Structure-aware** | Explicitly models cross-session structure via a maintained structural note that tracks projects and isolated sessions. |
+
+Reference points: **Universal** (no gating, current deployed systems) and **Oracle** (perfect ground-truth gating, upper bound).
+
+## Key Findings
+
+- **Perfect gating yields substantial retention gains** under tight memory budgets, confirming the value of personalization.
+- **Accurate gating remains an open challenge** — current baselines achieve only incremental gains, with gating F1 well below oracle.
+- Personalization benefits are **most pronounced under tighter memory budgets**, underscoring its critical importance for real-world deployment.
+
+---
+
+## Repository Structure
+
+```
+.
+├── 1_*                          # Persona metadata generation and filtering
+├── 2_*, 3_*                     # Life skeleton and timeline construction
+├── 4_dialogue_gen.py            # Dialogue generation
+├── 5_run_mem0.py                # Base Mem0 memory system run
+├── 6_gating_*.py                # Session gating methods (greedy, context, structure)
+├── 6_snapshot_augmentation.py   # Post-hoc budget/gating augmentation from snapshots
+├── 7_memory_retention_eval.py   # Memory retention rate evaluation
+├── 7_MRR_display.ipynb          # Retention results analysis
+├── sh/                          # Shell scripts for end-to-end runs
+└── PerMemBench/                 # Released benchmark dataset
+```
+
+---
+
+## Getting Started
+
+### Requirements
+
+Python 3.10+ is recommended. Key dependencies:
 
 - `python-dotenv`
 - `openai`
@@ -34,54 +85,44 @@ At minimum, you will typically need packages such as:
 - `google-genai` (if using Gemini)
 - `sentence-transformers`
 
-If you use local/vLLM inference, make sure your vLLM endpoint is running and reachable.
+### API Keys
 
-### 2) API keys
+Set provider keys in your environment or `.env` file:
 
-Set the provider key(s) in your environment or `.env` file (loaded automatically):
+```bash
+OPENAI_API_KEY=...
+ANTHROPIC_API_KEY=...
+TOGETHER_API_KEY=...
+GOOGLE_API_KEY=...
+```
 
-- `OPENAI_API_KEY`
-- `ANTHROPIC_API_KEY`
-- `TOGETHER_API_KEY`
-- `GOOGLE_API_KEY`
+### Download the Released Dataset
 
-### 3) Download/use the released PerMemBench dataset
-
-The prebuilt benchmark dataset is available in this repository under:
-
-- `PerMemBench/PerMemBench.zip`
-
-If you only want to run memory-system experiments and evaluation, you can use this dataset directly instead of running the full data-generation pipeline.
+The prebuilt dataset is available directly in this repository:
 
 ```bash
 unzip PerMemBench/PerMemBench.zip -d .
 ```
 
-After extraction, pass `PerMemBench` (or your extracted dataset path) as `dialogue_path` for `sh/run_mem0.sh`.
+You can then use `PerMemBench/` as your `dialogue_path` without running the full generation pipeline.
 
-## End-to-end pipeline
+---
 
-The main orchestration script is:
+## Running Experiments
+
+### End-to-end pipeline (data generation + experiments)
 
 ```bash
 bash sh/run_dial.sh <uuid>
 ```
 
-This script executes:
+This runs the full pipeline: persona generation → timeline construction → dialogue generation → memory system runs → evaluation. Pass a `uuid` to parallelize across users.
 
-1. Persona metadata generation and validation
-2. Long-horizon timeline construction (before and after pattern shift)
-3. Dialogue generation into `PerMemBench/`
-4. Memory system runs (base + gating variants)
-5. Snapshot augmentation hook (configure paths/options as needed)
-6. Retention evaluation through `sh/run_long.sh`
-
-## Running only memory system experiments
-
-To run Mem0 directly:
+### Run Mem0 memory system only
 
 ```bash
-bash sh/run_mem0.sh <granularity(turn|session)> <budget> <dialogue_path> <cuda_visible_devices> [mem0_llm_provider] [mem0_llm_model] [mem0_vllm_base_url] [oracle(true|false)] [uuid] [experiment_name]
+bash sh/run_mem0.sh <granularity(turn|session)> <budget> <dialogue_path> <cuda_visible_devices> \
+    [mem0_llm_provider] [mem0_llm_model] [mem0_vllm_base_url] [oracle(true|false)] [uuid] [experiment_name]
 ```
 
 Example:
@@ -90,25 +131,30 @@ Example:
 bash sh/run_mem0.sh session -1 PerMemBench 0 openai gpt-5-mini "" false "" exp_mem0
 ```
 
-## Evaluation and analysis
+### Snapshot augmentation (post-hoc budget/gating simulation)
 
-- Retention evaluation:
-  ```bash
-  bash sh/run_long.sh <snapshot_dir> <uuid> [workers]
-  ```
-- Result analysis:
-  - `7_MRR_display.ipynb`
-  - `7_gating_performance_display.ipynb`
+Run once without strict budgets to save snapshots, then apply budget/gating/eviction configurations post-hoc to reduce repeated LLM costs:
 
-## Notes
+```bash
+python 6_snapshot_augmentation.py \
+    --source_snapshot_dir <snapshot_path> \
+    --entry_budget 300 \
+    --skip_sessions gt   # one of: None, gt, results/context_gating, results/greedy_gating, results/structure_gating
+```
 
-- Output artifacts are typically written to `results/`.
-- Intermediate benchmark assets are generated under directories such as `life_*`, `pattern_shifts/`, and `PerMemBench/`.
-- `run_dial.sh` includes comments and defaults for common experiments; adapt model/provider/budget values to your setup.
+### Retention evaluation
+
+```bash
+bash sh/run_long.sh <snapshot_dir> <uuid> [workers]
+```
+
+### Analysis notebooks
+
+- `7_MRR_display.ipynb` — Memory Retention Rate results
+
+---
 
 ## Citation
-
-If you use this repository, please cite:
 
 ```bibtex
 @article{in2026personalize,
