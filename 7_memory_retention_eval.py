@@ -4,7 +4,6 @@ import json
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
-import time
 import numpy as np
 from dotenv import load_dotenv
 
@@ -18,18 +17,14 @@ from memory_bank import EmbeddingModel, cosine_similarity
 # ──────────────────────────────────────────────
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--snapshot_dir",  default='')
+parser.add_argument("--snapshot_dir",  default='results/run_mem0_base/sys=mem0__gran=session__bud=-1_200__mllm=openai-gpt-5-mini__d=v5/snapshots')
 parser.add_argument("--skeleton_dir",  default="./skeleton_dialogues")
 parser.add_argument("--output_dir",    default='memory_retention_results')
-parser.add_argument("--uuid",          default='036886affea947b48448038332105e45', help="Process a single UUID (default: all)")
-parser.add_argument("--top_k",         type=int, default=5)
+parser.add_argument("--uuid",          default='0b92f6b249864e83b4ceb0739fbc7910', help="Process a single UUID (default: all)")
 parser.add_argument("--write_top_k",   type=int, default=10,
                     help="Top-k fact-based retrieval for write eval "
                          "(pass only top-N fact-similar candidates to judge, not full memory)")
-parser.add_argument("--agent_model",       default="gpt-5-nano")
 parser.add_argument("--judge_model",       default="gpt-5-nano")
-parser.add_argument("--agent_temperature", type=float, default=0.0,
-                    help="Agent LLM temperature (default: 0.0)")
 parser.add_argument("--judge_temperature", type=float, default=0.0,
                     help="Judge LLM temperature (default: 0.0)")
 parser.add_argument("--embedding_provider", default="sentence_transformers",
@@ -42,7 +37,7 @@ args = parser.parse_args()
 
 
 # ──────────────────────────────────────────────
-# Prompts (same as 6_static_eval_v11)
+# Prompts
 # ──────────────────────────────────────────────
 
 BINARY_JUDGE_PROMPT = """\
@@ -59,42 +54,6 @@ Answer YES if the fact is clearly expressed (even if worded differently).
 Answer NO if the fact is absent or cannot be inferred from the text.
 
 Reply with only YES or NO.
-"""
-
-QA_AGENT_PROMPT = """\
-You are a helpful AI assistant. Answer the user's question using the provided memory context.
-If the memory context contains relevant information, use it to give a specific and accurate answer.
-If no relevant memory is available, say so briefly.
-
-## Retrieved Memory Context
-{memory_context}
-
-## Question
-{question}
-
-Answer concisely and directly.
-"""
-
-QA_JUDGE_PROMPT = """\
-You are evaluating whether an AI agent correctly answered a question.
-
-## Question
-{question}
-
-## Ground Truth Answer
-{gt_answer}
-
-## Agent's Response
-{agent_response}
-
-Evaluate whether the agent's response contains the exact key terms or specific information present in the ground truth answer.
-
-Rules:
-- Score 1.0: the response contains the specific terms, names, numbers, or phrases from the ground truth
-- Score 0.0: the response is vague, paraphrased without key terms, incorrect, or missing critical specifics
-
-Respond ONLY with a JSON object:
-{{"score": <0.0 | 1.0>}}
 """
 
 def sample_even_with_ends(arr, k):
@@ -133,47 +92,6 @@ def binary_judge(llm: UnifiedLLM, fact: str, text: str) -> int:
     except Exception as e:
         print(f"    [WARN] binary_judge failed: {e}")
         return 0
-
-
-def build_memory_context(memory_texts: list[str]) -> str:
-    if not memory_texts:
-        return "(No relevant memory found)"
-    lines = []
-    for i, txt in enumerate(memory_texts, 1):
-        lines.append(f"[Memory {i}]\n{txt}")
-    return "\n\n".join(lines)
-
-
-def run_qa(llm_agent: UnifiedLLM, llm_judge: UnifiedLLM,
-           probing_question: str, gt_answer: str,
-           retrieved_texts: list[str]) -> tuple[float, str]:
-    """Return QA score and agent response."""
-    memory_context = build_memory_context(retrieved_texts)
-    agent_prompt = QA_AGENT_PROMPT.format(
-        memory_context=memory_context, question=probing_question
-    )
-    try:
-        agent_response = llm_agent.chat(agent_prompt)
-    except Exception as e:
-        print(f"    [WARN] QA agent failed: {e}")
-        return 0.0, ""
-
-    if not agent_response.strip():
-        return 0.0, ""
-
-    judge_prompt = QA_JUDGE_PROMPT.format(
-        question=probing_question,
-        gt_answer=gt_answer,
-        agent_response=agent_response,
-    )
-    try:
-        raw = llm_judge.chat(judge_prompt)
-        clean = raw.replace("```json", "").replace("```", "").strip()
-        result = json.loads(clean)
-        return float(result.get("score", 0.0)), agent_response
-    except Exception as e:
-        print(f"    [WARN] QA judge failed: {e}")
-        return 0.0, agent_response
 
 
 # ──────────────────────────────────────────────
@@ -307,12 +225,8 @@ def build_project_end_map(skeleton_sessions: list[dict]) -> dict[tuple, int]:
 def eval_at_snapshot(
     snapshot: dict,
     fact: str,
-    probing_question: str,
-    gt_answer: str,
     embedder: EmbeddingModel,
     llm_judge: UnifiedLLM,
-    llm_agent: UnifiedLLM,
-    top_k: int,
     write_top_k: int,
 ) -> dict:
 
@@ -322,37 +236,14 @@ def eval_at_snapshot(
     # use fact as query, take top write_top_k candidates, then judge
     
 
-    # Measure time for write_candidates
-    t0 = time.time()
     write_candidates = retrieve_top_k(fact, memory_texts, embedder, write_top_k)
-    t1 = time.time()
-    print(f"[TIMER] retrieve_top_k (write): {t1-t0:.3f} sec")
-
-    # Measure time for join write_evidence
-    t2 = time.time()
     write_evidence   = "\n".join(write_candidates)
-    t3 = time.time()
-    print(f"[TIMER] join write_evidence: {t3-t2:.3f} sec")
-
-    # Measure time for write_score judgment
-    t4 = time.time()
     write_score      = binary_judge(llm_judge, fact, write_evidence)
-    t5 = time.time()
-    print(f"[TIMER] binary_judge (write): {t5-t4:.3f} sec")
-
-    retrieved = write_candidates
-    read_score   = 0
-    qa_score = 0
-    agent_response = ""
-
+    
     return {
         "session_id":     snapshot["session_id"],
         "write":          write_score,
-        "read":           read_score,
-        "qa":             round(qa_score, 4),
-        'retrieved':      retrieved,
-        "agent_response": agent_response,
-
+        "retrieved":      write_candidates,
     }
 
 
@@ -366,19 +257,13 @@ def aggregate_metrics(session_scores: list[dict]) -> dict:
     if n == 0:
         return {
             "retention_rate":        None,
-            "retrieval_rate":        None,
-            "avg_qa_score":          None,
             "first_failure_session": None,
             "n_eval_sessions":       0,
         }
 
     writes = [s["write"] for s in session_scores]
-    reads  = [s["read"]  for s in session_scores]
-    qas    = [s["qa"]    for s in session_scores]
 
     retention_rate = sum(writes) / n
-    retrieval_rate = sum(reads)  / n
-    avg_qa_score   = sum(qas)    / n
 
     first_failure = None
     for s in session_scores:
@@ -388,8 +273,6 @@ def aggregate_metrics(session_scores: list[dict]) -> dict:
 
     return {
         "retention_rate":        round(retention_rate, 4),
-        "retrieval_rate":        round(retrieval_rate, 4),
-        "avg_qa_score":          round(avg_qa_score, 4),
         "first_failure_session": first_failure,
         "n_eval_sessions":       n,
     }
@@ -406,8 +289,6 @@ def process_uuid(
     output_dir: Path,
     embedder: EmbeddingModel,
     llm_judge: UnifiedLLM,
-    llm_agent: UnifiedLLM,
-    top_k: int,
     write_top_k: int,
     skip_existing: bool,
 ) -> tuple[list[dict], bool]:
@@ -480,10 +361,7 @@ def process_uuid(
         for gt_idx, gt_item in enumerate(gt_memory):
             gt_type          = gt_item.get("type", "")
             fact             = gt_item.get("fact", "").strip()
-            probing_question = gt_item.get("probing_question", "").strip()
-            gt_answer        = gt_item.get("answer", "").strip()
-
-            if not fact or not probing_question or not gt_answer:
+            if not fact:
                 continue
 
             # determine validity window
@@ -515,17 +393,12 @@ def process_uuid(
                 scores = eval_at_snapshot(
                     snapshot=snapshots[t],
                     fact=fact,
-                    probing_question=probing_question,
-                    gt_answer=gt_answer,
                     embedder=embedder,
                     llm_judge=llm_judge,
-                    llm_agent=llm_agent,
-                    top_k=top_k,
                     write_top_k=write_top_k,
                 )
                 session_scores.append(scores)
-                print(f"      T={t:02d} write={scores['write']} "
-                      f"read={scores['read']} qa={scores['qa']:.2f}")
+                print(f"      T={t:02d} write={scores['write']}")
 
             metrics = aggregate_metrics(session_scores)
 
@@ -537,8 +410,6 @@ def process_uuid(
                 "domain":                domain,
                 "project_id":            project_id,
                 "fact":                  fact,
-                "probing_question":      probing_question,
-                "gt_answer":             gt_answer,
                 "valid_through_session": valid_through,
                 "session_scores":        session_scores,
                 "metrics":               metrics,
@@ -574,13 +445,20 @@ def process_uuid(
 def main():
     snapshot_root = Path(args.snapshot_dir)
     skeleton_root = Path(args.skeleton_dir)
-    output_dir    = Path(args.snapshot_dir.replace('snapshots', 'longitudinal_results_approx_20') + '/' + args.embedding_model + '_' + 'top'+str(args.top_k) + '_' + args.judge_model)
+    output_dir    = Path(
+        args.snapshot_dir.replace("snapshots", "longitudinal_results_approx_20")
+        + "/"
+        + args.embedding_model
+        + "_write_top"
+        + str(args.write_top_k)
+        + "_"
+        + args.judge_model
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
 
     embedder  = EmbeddingModel(provider=args.embedding_provider,
                                model=args.embedding_model)
     llm_judge = make_llm(args.judge_model, temperature=args.judge_temperature)
-    llm_agent = make_llm(args.agent_model, temperature=args.agent_temperature)
 
     # UUID list + snapshot path mapping (auto legacy/new layout)
     snapshot_uuid_map = discover_snapshot_uuid_dirs(snapshot_root, args.uuid)
@@ -590,9 +468,7 @@ def main():
     print(f"Skeleton dir : {skeleton_root}")
     print(f"Output dir   : {output_dir}")
     print(f"UUIDs        : {len(uuid_list)}")
-    print(f"top_k        : {args.top_k}  (read/qa)")
-    print(f"write_top_k  : {args.write_top_k}  (write judge candidates)")
-    print(f"agent_model  : {args.agent_model}")
+    print(f"write_top_k  : {args.write_top_k}")
     print(f"judge_model  : {args.judge_model}\n")
 
     # CSV setup
@@ -600,7 +476,7 @@ def main():
     csv_fieldnames = [
         "uuid", "source_session_id", "gt_idx", "gt_type",
         "domain", "project_id", "fact", "valid_through_session",
-        "retention_rate", "retrieval_rate", "avg_qa_score",
+        "retention_rate",
         "first_failure_session", "n_eval_sessions",
     ]
     write_header = not agg_csv_path.exists()
@@ -624,8 +500,6 @@ def main():
             output_dir=output_dir,
             embedder=embedder,
             llm_judge=llm_judge,
-            llm_agent=llm_agent,
-            top_k=args.top_k,
             write_top_k=args.write_top_k,
             skip_existing=args.skip_existing,
         )
@@ -639,47 +513,6 @@ def main():
         all_rows.extend(rows)
 
     agg_csv.close()
-
-    # ── Summary ──────────────────────────────────
-    def mean(lst):
-        lst = [x for x in lst if x is not None]
-        return round(sum(lst) / len(lst), 4) if lst else None
-
-    summary = {"total_facts": len(all_rows), "by_gt_type": {}}
-
-    for gt_type in ("user_profile", "ongoing_state"):
-        subset = [r for r in all_rows if r["gt_type"] == gt_type]
-        if not subset:
-            continue
-        summary["by_gt_type"][gt_type] = {
-            "n_facts":        len(subset),
-            "retention_rate": mean([r["retention_rate"] for r in subset]),
-            "retrieval_rate": mean([r["retrieval_rate"] for r in subset]),
-            "avg_qa_score":   mean([r["avg_qa_score"]   for r in subset]),
-        }
-
-    summary["overall"] = {
-        "retention_rate": mean([r["retention_rate"] for r in all_rows]),
-        "retrieval_rate": mean([r["retrieval_rate"] for r in all_rows]),
-        "avg_qa_score":   mean([r["avg_qa_score"]   for r in all_rows]),
-    }
-
-    summary_path = output_dir / "summary.json"
-    with open(summary_path, "w", encoding="utf-8") as f:
-        json.dump(summary, f, ensure_ascii=False, indent=2)
-
-    print("\n" + "=" * 60)
-    print(f"DONE | Total facts: {len(all_rows)}")
-    for gt_type, m in summary["by_gt_type"].items():
-        print(f"\n  [{gt_type}]  n={m['n_facts']}")
-        print(f"    retention_rate : {m['retention_rate']}")
-        print(f"    retrieval_rate : {m['retrieval_rate']}")
-        print(f"    avg_qa_score   : {m['avg_qa_score']}")
-    print(f"\n  [overall]")
-    print(f"    retention_rate : {summary['overall']['retention_rate']}")
-    print(f"    retrieval_rate : {summary['overall']['retrieval_rate']}")
-    print(f"    avg_qa_score   : {summary['overall']['avg_qa_score']}")
-    print(f"\nResults → {output_dir}")
 
 
 if __name__ == "__main__":

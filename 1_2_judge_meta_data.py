@@ -248,7 +248,7 @@ def run_multi_model_judgment(
 # %%
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Judge memory_required decisions with multiple LLMs")
-    parser.add_argument('--input_dir', type=str, default='./persona_metadata_domains_v3',
+    parser.add_argument('--input_dir', type=str, default='./persona_metadata_domains',
                         help='Directory containing generated persona metadata')
     parser.add_argument('--output_dir', type=str, default='./judgment_results',
                         help='Directory to save judgment results')

@@ -137,7 +137,7 @@ def merge_extended_to_life_style(input_path: str | Path, output_path: str | Path
     return output
 
 in_dir = Path("extended_timelines")
-out_dir = Path("life_timelines_v5_merged")
+out_dir = Path("life_timelines_merged")
 
 count = 0
 for input_path in sorted(in_dir.glob("*.json")):
